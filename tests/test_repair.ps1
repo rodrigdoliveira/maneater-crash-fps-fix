@@ -343,6 +343,26 @@ try{
         Assert-Test ((Same-NativeRecord $case $oldRecord) -and (Hash (Join-Path $case.Bin 'dxgi.dll')) -ceq $oldRecord.ModSHA256 -and (Hash (Join-Path $case.Bin 'dxgi_codex_system.dll')) -ceq $oldRecord.SystemSHA256 -and (Same-Config $case) -and [IO.File]::Exists($case.Ansel)) "$corruption manifest preserves an owned upgrade's old pair/state/settings"
     }
 
+    $case=New-Scenario 'amd-worker-budget'
+    & $case.Module {
+        $rows=@();for($logical=0;$logical -lt 12;$logical++){
+            $rows+=[pscustomobject]@{Id=900+$logical;Group=0;LogicalProcessorIndex=$logical;CoreIndex=[int][Math]::Floor($logical/2);EfficiencyClass=0;Flags=0}
+        }
+        $script:AmdFixturePlan=Get-CpuLaunchPlan -CpuSets $rows -Manufacturer AuthenticAMD -ProcessorName 'AMD Ryzen fixture'
+        function script:Get-ManeaterCpuPlan {return $script:AmdFixturePlan}
+        function script:New-ManeaterLaunchOptions {
+            param($ExistingOptions,$CpuPlan,[switch]$AllowUntestedBuild)
+            return (New-GameLaunchPlan -ExistingOptions $ExistingOptions -CpuPlan $CpuPlan -AllowUntestedBuild:$AllowUntestedBuild).SteamLaunchOptions
+        }
+    }
+    $journal=Invoke-Case $case
+    Assert-Test ($journal.Status -ceq 'applied' -and $journal.Plan.Cpu.IsAmdWorkerBudget -and $journal.Plan.Cpu.Experimental -and -not $journal.Plan.Cpu.ApplyAffinity -and $journal.Plan.Cpu.CoreLimit -eq 6) 'AMD budget-only experimental plan is recorded in real composite transaction'
+    $actualSteam=& $case.Module {param($Config) Get-SteamFixStatus -ConfigPath $Config} $case.Config
+    Assert-Test ($actualSteam.ExistingLaunchOptions -match '-corelimit=6' -and $actualSteam.ExistingLaunchOptions -match 'MANEATER_FIX_CPU_MANAGED=1' -and $actualSteam.ExistingLaunchOptions -notmatch '/affinity') 'Steam backend applies physical AMD budget without an affinity mask'
+    Assert-Test ((Test-CaseState $case $journal).Valid) 'applied AMD budget verifies through actual launch-wrapper regeneration'
+    Restore-Case $case|Out-Null
+    Assert-Test ((Same-Config $case) -and (Read-Journal $case).Status -ceq 'restored') 'AMD budget restore returns exact previous Steam launch options'
+
     Write-Output "PASS: $script:passed composite repair contracts; isolated fake installation only."
 }finally{
     $full=[IO.Path]::GetFullPath($testRoot);$prefix=[IO.Path]::GetFullPath($PSScriptRoot).TrimEnd([char[]]'\/')+[IO.Path]::DirectorySeparatorChar

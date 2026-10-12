@@ -24,7 +24,7 @@ To update an existing setup, use the previous launcher's **Restore previous setu
 | --- | --- |
 | Native FPS correction | Replaces the supported engine's forced 60 FPS request with 120 FPS through its original setter. Other requests and graphics settings are preserved. |
 | OpenSSL compatibility | Applies Maneater's official OpenSSL compatibility flag through game-specific Steam launch options. It does not set a permanent system environment variable. |
-| CPU scheduling and worker budget | On a supported Intel hybrid topology, detects performance cores and derives both affinity and `-corelimit` from those cores. Homogeneous, AMD, ambiguous and multiple-processor-group layouts retain normal scheduling. |
+| CPU scheduling and worker budget | Intel hybrid CPUs use a performance-core affinity mask and worker budget. Eligible AMD Ryzen CPUs with SMT use an experimental physical-core worker budget, with normal Windows scheduling and no affinity mask. Unsupported or ambiguous layouts remain unrestricted. |
 | Ansel SDK | Reversibly disables the recognized bundled NVIDIA Ansel SDK. This removes its photo-mode support. Already absent or externally disabled copies are preserved. |
 | Steam overlay | Turns off the overlay for Maneater only. |
 
@@ -47,6 +47,8 @@ This option is limited to an installation identified as Maneater in the current 
 Opting in permits an experiment; it does not establish compatibility. It can relax the native version-metadata check, while keeping exact code signatures, image bounds, object layout and call-site guards. The FPS hook may decline to change anything if the game differs. An unrecognized Ansel SDK is preserved, that step is skipped, and the launcher reports a warning. The retained workarounds and their benefits also remain unverified on that build. Use **Restore previous setup** if the experiment does not help.
 
 CPU settings are derived from Windows topology, with no preset mask or core count copied from a developer's PC. The bundle does not impose a particular GPU model.
+
+The AMD Ryzen path sets `-corelimit` to the detected physical core count when SMT is present. It keeps all logical processors available and leaves X3D/CCD placement to Windows and the chipset drivers. Eligibility uses the AMD vendor and Ryzen identity; core counts come from Windows topology. Older or unidentified AMD CPUs, CPUs without SMT, and multiple processor groups are excluded. This follows [AMD's conservative starting-budget guidance](https://gpuopen.com/learn/cpu-core-count-detection-windows/), but has **no AMD gameplay validation**. It may help or hurt performance; use Restore if it does not help.
 
 The included mod also requires a matching Windows DXGI export contract: exported names and ordinals must agree with the verified local Windows library. That Windows DLL is copied from your PC during installation, not distributed in the ZIP. A different local Windows DLL file hash alone is acceptable when the export contract matches. Missing, stale or corrupt packaged files, or an incompatible export contract, stop the repair before it changes game files or Steam settings. There is no automatic compilation fallback; download a compatible ready release or use the developer build instructions below.
 

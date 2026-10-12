@@ -19,6 +19,8 @@ For an untested build, report installation and runtime outcomes separately. Inst
 
 For performance reports, separate steady gameplay from loading, menus, Alt-Tab and normal quitting. If available, include a compact frame-time summary and the scene tested. CPU and GPU models are optional context, not prerequisites for reporting.
 
+AMD Ryzen worker-budget support is experimental and has not been tested during AMD gameplay. Reports should include physical/logical core counts, the applied core limit and whether a comparison without the CPU limit was better or worse. Keep Windows/AMD scheduling intact; do not infer an X3D cache CCD from processor numbering or add a fixed affinity preset. Fixture coverage proves planning and restoration, not a performance gain.
+
 For crash reports, distinguish an exception or crash report from a normal quit. Identify other workarounds already in use and avoid attributing a crash-free session to one change unless a controlled comparison supports it. The current native implementation corrects the FPS cap; it does not implement a verified crash-prevention change.
 
 Do not post game or Windows binaries, saves, installation records, crash dumps or raw traces in public issues. These can contain personal paths or process data. Remove usernames, absolute paths and unrelated identifiers from excerpts.

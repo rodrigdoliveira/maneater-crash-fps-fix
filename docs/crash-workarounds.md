@@ -60,7 +60,13 @@ These two controls do different jobs. Process affinity chooses the logical proce
 
 Read-only inspection during this investigation confirmed that affinity alone left the engine using its larger machine-wide worker budget. Adding a selected core limit changed the cached counts and task-graph worker groups. That verifies the budget correction, not a causal explanation for the crashes. Restricting CPU resources too far can make performance worse.
 
-The GUI derives an applicable configuration from the detected CPU topology, rather than copying one computer's count or mask. For a manual alternative, leave these options unset unless you can determine and verify a suitable configuration:
+The GUI derives an applicable configuration from the detected CPU topology, rather than copying one computer's count or mask.
+
+On eligible AMD Ryzen systems with SMT, the launcher applies an experimental `-corelimit` equal to the physical core count. It adds no affinity mask, disables no SMT processors, and makes no CCD or V-Cache selection. Mixed core classes are counted together, and temporary parking does not remove cores from the budget. AMD's [thread-pool guidance](https://gpuopen.com/learn/cpu-core-count-detection-windows/) uses physical core count as a conservative starting point and requires profiling; it does not establish a Maneater fix. No AMD gameplay test has been performed. Non-Ryzen AMD, no-SMT, reserved/real-time CPU sets, inconsistent SMT records and multiple processor groups retain normal scheduling.
+
+The AMD budget is marked experimental in the plan shown before Apply. Worker limits created by the launcher carry a separate CPU-management marker so later planning can update or remove this project's budget. Matching manual core-limit arguments stay user-owned. Restore uses the saved previous launch options.
+
+For a manual alternative, leave these options unset unless you can determine and verify a suitable configuration:
 
 - Derive a positive `N` from the physical cores available to the intended game workload and validate the result on that hardware. Do not use a count larger than the available resources or copy a count from another computer. Replace `N` with the chosen integer before using `-corelimit=N` in Steam Launch Options.
 - If experimenting with affinity, enumerate the operating system's actual logical-processor-to-core mapping, including SMT siblings and any heterogeneous core classes. Do not assume sequential or even-numbered processor indexes correspond to a particular core type.

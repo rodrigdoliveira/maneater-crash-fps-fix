@@ -84,18 +84,21 @@ function Get-WindowsCpuTopology {
         $parsed = ConvertFrom-CpuSetBuffer -Buffer ([ManeaterCpuPlan.NativeV1]::ReadCpuSets())
         $groups = [int][ManeaterCpuPlan.NativeV1]::GetActiveProcessorGroupCount()
         if ($groups -lt 1) { throw 'Windows did not report an active processor group.' }
-        $vendors = @(Get-CimInstance -ClassName Win32_Processor | Select-Object -ExpandProperty Manufacturer -Unique)
+        $processors = @(Get-CimInstance -ClassName Win32_Processor)
+        $vendors = @($processors | Select-Object -ExpandProperty Manufacturer -Unique)
+        $names = @($processors | Select-Object -ExpandProperty Name -Unique)
         $vendor = if ($vendors.Count -eq 1) { [string]$vendors[0] } else { '' }
-        return [pscustomobject]@{ Succeeded = $true; Manufacturer = $vendor; ActiveGroupCount = $groups
+        $name = if ($names.Count -eq 1) { [string]$names[0] } else { '' }
+        return [pscustomobject]@{ Succeeded = $true; Manufacturer = $vendor; ProcessorName = $name; ActiveGroupCount = $groups
             CpuSets = $parsed.CpuSets; UnknownRecordTypes = $parsed.UnknownRecordTypes; Error = $null }
     } catch {
-        return [pscustomobject]@{ Succeeded = $false; Manufacturer = ''; ActiveGroupCount = 0; CpuSets = @(); UnknownRecordTypes = 0
+        return [pscustomobject]@{ Succeeded = $false; Manufacturer = ''; ProcessorName = ''; ActiveGroupCount = 0; CpuSets = @(); UnknownRecordTypes = 0
             Error = $_.Exception.Message }
     }
 }
 function New-EmptyCpuPlan {
     param([string]$Manufacturer, [string]$Reason, [int]$GroupCount = 0)
-    return [pscustomobject]@{ Apply = $false; Applicable = $false; IsIntelHybrid = $false; Manufacturer = $Manufacturer
+    return [pscustomobject]@{ Apply = $false; ApplyAffinity = $false; Applicable = $false; IsIntelHybrid = $false; IsAmdWorkerBudget = $false; Experimental = $false; Manufacturer = $Manufacturer
         Description = $Reason; Reason = $Reason; GroupCount = $GroupCount; AffinityMask = [uint64]0; AffinityMaskHex = $null
         CoreLimit = $null; PerformancePhysicalCores = 0; PerformanceLogicalProcessors = 0
         TotalPhysicalCores = 0; TotalLogicalProcessors = 0; EfficiencyClass = $null; Notes = @() }
@@ -103,7 +106,7 @@ function New-EmptyCpuPlan {
 function Get-CpuLaunchPlan {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$CpuSets,
-          [string]$Manufacturer = '', [int]$ActiveGroupCount = 0)
+          [string]$Manufacturer = '', [int]$ActiveGroupCount = 0, [string]$ProcessorName = '')
     if ($CpuSets.Count -eq 0) { return New-EmptyCpuPlan $Manufacturer 'CPU-set data is unavailable; keep normal game CPU scheduling.' }
     $rows = @(); $seenLogical = @{}; $seenIds = @{}
     try {
@@ -128,7 +131,33 @@ function Get-CpuLaunchPlan {
     if ($ActiveGroupCount -ne 1 -or $groups.Count -ne 1 -or $groups[0] -ne 0) {
         return New-EmptyCpuPlan $Manufacturer 'Multiple or nonzero processor groups need group-aware scheduling; this launcher will not apply affinity or corelimit.' $ActiveGroupCount
     }
-    if ($Manufacturer -ine 'GenuineIntel') { return New-EmptyCpuPlan $Manufacturer 'P-core restriction is only supported for clearly identified Intel hybrid CPUs; keep normal scheduling.' 1 }
+    if ($Manufacturer -ieq 'AuthenticAMD') {
+        if ($ProcessorName -notmatch '(?i:\bRyzen\b)') {
+            return New-EmptyCpuPlan $Manufacturer 'AMD processor is not clearly identified as Ryzen; keep normal scheduling and worker budget.' 1
+        }
+        foreach ($physical in @($rows | Group-Object CoreKey)) {
+            if ($physical.Count -gt 2 -or @($physical.Group | Select-Object -ExpandProperty EfficiencyClass -Unique).Count -ne 1) {
+                return New-EmptyCpuPlan $Manufacturer 'Ryzen SMT sibling topology is ambiguous; no AMD worker budget will be added.' 1
+            }
+        }
+        if (@($rows | Where-Object { ($_.Flags -band 14) -ne 0 }).Count -ne 0) {
+            return New-EmptyCpuPlan $Manufacturer 'AMD CPU sets are exclusively allocated or real-time; keep normal scheduling and worker budget.' 1
+        }
+        $physicalCount = @($rows | Select-Object -ExpandProperty CoreKey -Unique).Count
+        if ($physicalCount -lt 2 -or $rows.Count -le $physicalCount) {
+            return New-EmptyCpuPlan $Manufacturer 'Ryzen SMT is not exposed with at least two physical cores; no worker-budget change is needed.' 1
+        }
+        $description = 'Experimental AMD Ryzen: {0} physical cores / {1} logical processors; -corelimit={0}, with normal Windows scheduling and no affinity restriction. No AMD gameplay validation yet.' -f $physicalCount,$rows.Count
+        return [pscustomobject]@{ Apply = $true; ApplyAffinity = $false; Applicable = $true; IsIntelHybrid = $false; IsAmdWorkerBudget = $true; Experimental = $true; Manufacturer = $Manufacturer; ProcessorName = $ProcessorName
+            Description = $description; Reason = $description; GroupCount = 1; AffinityMask = [uint64]0; AffinityMaskHex = $null
+            CoreLimit = $physicalCount; PerformancePhysicalCores = 0; PerformanceLogicalProcessors = 0
+            TotalPhysicalCores = $physicalCount; TotalLogicalProcessors = $rows.Count; EfficiencyClass = $null
+            Notes = @('Experimental Ryzen worker budget based on physical core count; Maneater gameplay has not been tested on AMD hardware.',
+                'All cores and SMT siblings remain available to Windows scheduling; no CCD, cache or preferred-core affinity is imposed.',
+                'Dynamic parking and differing classes between physical cores do not change the worker budget.',
+                'AMD recommends physical core count as an initial worker-pool budget: https://gpuopen.com/learn/cpu-core-count-detection-windows/') }
+    }
+    if ($Manufacturer -ine 'GenuineIntel') { return New-EmptyCpuPlan $Manufacturer 'CPU vendor is not supported by a hardware-derived plan; keep normal scheduling.' 1 }
     $classes = @($rows | Select-Object -ExpandProperty EfficiencyClass -Unique | Sort-Object)
     if ($classes.Count -lt 2) { return New-EmptyCpuPlan $Manufacturer 'Windows reports a homogeneous CPU layout; no affinity or corelimit is needed.' 1 }
     foreach ($physical in @($rows | Group-Object CoreKey)) {
@@ -150,7 +179,7 @@ function Get-CpuLaunchPlan {
         'Parking can change dynamically; all performance-core SMT siblings remain selected.',
         'This workaround is optional and does not establish a universal crash or stutter cure.')
     $description = 'Intel hybrid layout: {0} physical performance cores / {1} logical processors; use affinity {2} and -corelimit={0}.' -f $physicalCount,$performance.Count,$hex
-    return [pscustomobject]@{ Apply = $true; Applicable = $true; IsIntelHybrid = $true; Manufacturer = $Manufacturer
+    return [pscustomobject]@{ Apply = $true; ApplyAffinity = $true; Applicable = $true; IsIntelHybrid = $true; IsAmdWorkerBudget = $false; Experimental = $false; Manufacturer = $Manufacturer
         Description = $description; Reason = $description; GroupCount = 1; AffinityMask = $mask; AffinityMaskHex = $hex
         CoreLimit = $physicalCount; PerformancePhysicalCores = $physicalCount; PerformanceLogicalProcessors = $performance.Count
         TotalPhysicalCores = @($rows | Select-Object -ExpandProperty CoreKey -Unique).Count; TotalLogicalProcessors = $rows.Count
@@ -161,7 +190,7 @@ function Get-ManeaterCpuPlan {
     param()
     $topology = Get-WindowsCpuTopology
     if (-not $topology.Succeeded) { return New-EmptyCpuPlan '' ('CPU enumeration unavailable: ' + $topology.Error + ' Keep normal scheduling.') }
-    return Get-CpuLaunchPlan -CpuSets $topology.CpuSets -Manufacturer $topology.Manufacturer -ActiveGroupCount $topology.ActiveGroupCount
+    return Get-CpuLaunchPlan -CpuSets $topology.CpuSets -Manufacturer $topology.Manufacturer -ActiveGroupCount $topology.ActiveGroupCount -ProcessorName $topology.ProcessorName
 }
 
 # Argument spans preserve original game-argument quoting (including UE's
@@ -200,7 +229,13 @@ function Get-KnownGameArguments {
             throw 'Existing wrapper is not a recognized process-scoped OpenSSL workaround; preserve it for manual review.'
         }
         $launch = $Matches.launch; $knownWrapper = $true
-        if($launch -match '^(?i:set)\s+"(?i:MANEATER_FIX_ALLOW_UNTESTED)=(?<optin>[01])"\s*&&\s*(?<game>.+)$'){$launch=$Matches.game}
+        if($launch -match '^(?i:set)\s+"(?i:MANEATER_FIX_ALLOW_UNTESTED)=(?<optin>[01])"\s*&&\s*(?<game>.+)$'){
+            $launch=$Matches.game
+            # The untested-build flag existed on wrappers with manual user
+            # budgets. Only this dedicated AMD marker owns a worker-only
+            # corelimit; older affinity wrappers remain recognized below.
+            if($launch -match '^(?i:set)\s+"(?i:MANEATER_FIX_CPU_MANAGED)=1"\s*&&\s*(?<game>.+)$'){$launch=$Matches.game;$managedCpu=$true}
+        }
         if ($launch -match '^(?i:start)\s+') {
             $tokens = @(Get-LaunchTokenSpans $launch); $commandIndex = -1; $titleCount = 0; $seenWait = $false; $seenB = $false; $seenAffinity = $false
             for ($index = 1; $index -lt $tokens.Count; ++$index) {
@@ -238,9 +273,35 @@ function New-GameLaunchPlan {
           [bool]$EnableOpenSsl = $true, [bool]$IncludeCpuPlan = $true, [switch]$AllowUntestedBuild)
     $parsed = Get-KnownGameArguments $ExistingOptions
     $arguments = $parsed.Arguments; $cpuApplied = $IncludeCpuPlan -and [bool]$CpuPlan.Apply; $hasCoreLimit = $false
+    # Legacy/mocked Intel plans did not expose ApplyAffinity. Preserve their
+    # prior behavior, while Ryzen plans explicitly leave placement to Windows.
+    $applyAffinity = $true
+    if ($cpuApplied -and $null -ne $CpuPlan.PSObject.Properties['ApplyAffinity']) {
+        if ($CpuPlan.ApplyAffinity -isnot [bool]) { throw 'CPU affinity choice must be an explicit boolean.' }
+        $applyAffinity = $CpuPlan.ApplyAffinity
+        if (-not $applyAffinity -and ($null -eq $CpuPlan.PSObject.Properties['IsAmdWorkerBudget'] -or
+            $null -eq $CpuPlan.PSObject.Properties['Experimental'] -or $null -eq $CpuPlan.PSObject.Properties['Manufacturer'] -or
+            $null -eq $CpuPlan.PSObject.Properties['ProcessorName'] -or $CpuPlan.IsAmdWorkerBudget -isnot [bool] -or
+            $CpuPlan.Experimental -isnot [bool] -or -not $CpuPlan.IsAmdWorkerBudget -or -not $CpuPlan.Experimental -or
+            $CpuPlan.Manufacturer -ine 'AuthenticAMD' -or $CpuPlan.ProcessorName -notmatch '(?i:\bRyzen\b)')) {
+            throw 'Worker-only CPU plan must explicitly identify an experimental AMD Ryzen budget.'
+        }
+        if (-not $applyAffinity -and ($null -eq $CpuPlan.PSObject.Properties['TotalPhysicalCores'] -or
+            $null -eq $CpuPlan.PSObject.Properties['TotalLogicalProcessors'] -or $CpuPlan.TotalPhysicalCores -notmatch '^\d+$' -or
+            $CpuPlan.TotalLogicalProcessors -notmatch '^\d+$' -or $CpuPlan.CoreLimit -notmatch '^\d+$' -or
+            [long]$CpuPlan.TotalPhysicalCores -ne [long]$CpuPlan.CoreLimit -or [long]$CpuPlan.TotalLogicalProcessors -gt 64 -or
+            [long]$CpuPlan.TotalLogicalProcessors -le [long]$CpuPlan.TotalPhysicalCores -or
+            [long]$CpuPlan.TotalLogicalProcessors -gt (2 * [long]$CpuPlan.TotalPhysicalCores))) {
+            throw 'AMD worker-only plan has inconsistent physical-core and SMT counts.'
+        }
+    }
+    $affinityApplied = $cpuApplied -and $applyAffinity
     if ($cpuApplied) {
-        if ($CpuPlan.GroupCount -ne 1 -or $CpuPlan.CoreLimit -lt 2 -or $CpuPlan.AffinityMaskHex -notmatch '^[0-9A-Fa-f]{1,16}$' -or
-            [Convert]::ToUInt64($CpuPlan.AffinityMaskHex,16) -eq 0) { throw 'CPU plan is not safe for a single-group launch.' }
+        if ($CpuPlan.GroupCount -ne 1 -or $CpuPlan.CoreLimit -notmatch '^\d+$' -or $CpuPlan.CoreLimit -lt 2 -or $CpuPlan.CoreLimit -gt 64) {
+            throw 'CPU worker budget is not safe for a single-group launch.'
+        }
+        if ($affinityApplied -and ($CpuPlan.AffinityMaskHex -notmatch '^[0-9A-Fa-f]{1,16}$' -or
+            [Convert]::ToUInt64($CpuPlan.AffinityMaskHex,16) -eq 0)) { throw 'CPU affinity plan is not safe for a single-group launch.' }
         foreach ($token in @(Get-LaunchTokenSpans $arguments)) {
             if ($token.Value -match '^(?i:-corelimit)=(?<limit>\d+)$') {
                 if ([long]$Matches.limit -ne $CpuPlan.CoreLimit) { throw 'Existing -corelimit conflicts with the hardware-derived plan; it will not be overwritten.' }
@@ -254,8 +315,12 @@ function New-GameLaunchPlan {
     $prefix = if ($EnableOpenSsl) { 'set "OPENSSL_ia32cap=:~0x20000000" && ' } else { '' }
     $experimental=$(if($AllowUntestedBuild){'1'}else{'0'})
     $prefix += 'set "MANEATER_FIX_ALLOW_UNTESTED=' + $experimental + '" && '
+    # A matching manual corelimit is borrowed, not claimed. Only limits we
+    # appended (including removed/recreated owned limits) get this marker.
+    $managedAmdBudget = $cpuApplied -and -not $affinityApplied -and -not $hasCoreLimit
+    if ($managedAmdBudget) { $prefix += 'set "MANEATER_FIX_CPU_MANAGED=1" && ' }
     $start = 'start "" /b /wait'
-    if ($cpuApplied) { $start += ' /affinity ' + $CpuPlan.AffinityMaskHex.ToUpperInvariant() }
+    if ($affinityApplied) { $start += ' /affinity ' + $CpuPlan.AffinityMaskHex.ToUpperInvariant() }
     $tail = if ($arguments.Length -ne 0) { ' ' + $arguments } else { '' }
     $steamBody = $prefix + $start + ' %command%' + $tail
     $steam = 'cmd /d /v:off /s /c "' + $steamBody + '"'
@@ -266,9 +331,14 @@ function New-GameLaunchPlan {
         if ([IO.Path]::GetExtension($exe) -ine '.exe') { throw 'Select the game executable.' }
         $direct = '/d /v:off /s /c "' + $prefix + $start + ' /d "' + [IO.Path]::GetDirectoryName($exe) + '" "' + $exe + '"' + $tail + '"'
     }
-    return [pscustomobject]@{ SteamLaunchOptions = $steam; CmdArguments = $direct; CpuApplied = $cpuApplied
+    return [pscustomobject]@{ SteamLaunchOptions = $steam; CmdArguments = $direct; CpuApplied = $cpuApplied; AffinityApplied = $affinityApplied
         GameArguments = $arguments; PreservedExistingArguments = $parsed.Arguments; RecognizedExistingWrapper = $parsed.KnownWrapper
-        RegeneratedManagedCpu = $parsed.RegeneratedManagedCpu; UntestedBuildOptIn=[bool]$AllowUntestedBuild; EnvironmentOverrides = $(if ($EnableOpenSsl) { @{ OPENSSL_ia32cap = ':~0x20000000'; MANEATER_FIX_ALLOW_UNTESTED=$experimental } } else { @{MANEATER_FIX_ALLOW_UNTESTED=$experimental} })
+        RegeneratedManagedCpu = $parsed.RegeneratedManagedCpu; UntestedBuildOptIn=[bool]$AllowUntestedBuild; EnvironmentOverrides = $(
+            $overrides = @{MANEATER_FIX_ALLOW_UNTESTED=$experimental}
+            if ($EnableOpenSsl) { $overrides.OPENSSL_ia32cap=':~0x20000000' }
+            if ($managedAmdBudget) { $overrides.MANEATER_FIX_CPU_MANAGED='1' }
+            $overrides
+        )
         Description = 'Changes are scoped to this launched process; no system environment or CPU settings are changed.' }
 }
 function New-ManeaterLaunchOptions {
