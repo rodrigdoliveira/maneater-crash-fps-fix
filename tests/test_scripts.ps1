@@ -67,6 +67,7 @@ try {
     $original = New-FixturePe $fixtureExports $validPath
     $valid = Get-PeExportTable $validPath
     Assert-Test ($valid.Machine -eq 'AMD64' -and $valid.Exports.Count -eq 2 -and $valid.Exports[0].Ordinal -eq 3) 'valid AMD64 named export table'
+    Assert-Test ($valid.FileSHA256 -ceq (Get-FileHash -LiteralPath $validPath -Algorithm SHA256).Hash) 'hash describes parsed byte snapshot'
     Assert-Test ($valid.Exports[0].Forwarder -ceq 'dxgi_codex_system.Alpha') 'forwarder string parsing'
     $definition = Join-Path $testRoot 'fixture.def'; New-DxgiForwarderDefinition $valid.Exports $definition
     Assert-Test (([IO.File]::ReadAllText($definition)) -match 'Alpha=dxgi_codex_system.Alpha @3') 'definition preserves name and ordinal'
@@ -131,6 +132,11 @@ try {
     Assert-Throws { & $manager -Action Install -GameDirectory $bin } 'foreign replacement during rollback reported'
     Assert-Test (([IO.File]::ReadAllText((Join-Path $bin 'dxgi.dll'))) -ceq 'Foreign rollback replacement' -and
         -not [IO.File]::Exists((Join-Path $bin 'dxgi_codex_system.dll'))) 'rollback preserves foreign replacement and removes the other owned copy'
+    Remove-Item -LiteralPath (Join-Path $bin 'dxgi.dll')
+    $changedProxy = $managerText.Replace('$proxy = Get-PeExportTable -Path $modSource', "`$changed = [IO.File]::ReadAllBytes(`$modSource); `$changed[5119] = 1; [IO.File]::WriteAllBytes(`$modSource, `$changed)`n`$proxy = Get-PeExportTable -Path `$modSource")
+    [IO.File]::WriteAllText($manager, $changedProxy, [Text.UTF8Encoding]::new($false)); Update-FixtureManifest $fixture $gameHash $system
+    Assert-Throws { & $manager -Action Install -GameDirectory $bin } 'proxy replacement between initial hash and PE validation refused'
+    Assert-Test (-not [IO.File]::Exists((Join-Path $bin 'dxgi.dll')) -and -not [IO.File]::Exists((Join-Path $bin 'dxgi_codex_system.dll'))) 'source replacement never copied into the fake game'
     "PASS: $passed PE, build-provenance, and scratch installer contracts. No game or DLL was executed."
 } finally {
     $resolvedRoot = [IO.Path]::GetFullPath($testRoot)

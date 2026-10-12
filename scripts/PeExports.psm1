@@ -149,8 +149,11 @@ function Get-PeExportTable {
         }
     }
     $exports = @($exports | Sort-Object Ordinal)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $fileHash = ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '') }
+    finally { $sha.Dispose() }
     return [pscustomobject]@{ Machine = 'AMD64'; Is64Bit = $true; ExportBase = $ordinalBase; Exports = $exports
-        FileSHA256 = (Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash; ContractSHA256 = Get-ExportContractHash $exports }
+        FileSHA256 = $fileHash; ContractSHA256 = Get-ExportContractHash $exports }
 }
 function New-DxgiForwarderDefinition {
     [CmdletBinding()]

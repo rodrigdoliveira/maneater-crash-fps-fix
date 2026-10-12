@@ -89,11 +89,14 @@ $system = Get-VerifiedWindowsDxgi
 if ($system.Table.ContractSHA256 -cne $manifest.SystemExportsSHA256 -or
     (Get-ExportContractHash -Exports @($manifest.SystemExports)) -cne $manifest.SystemExportsSHA256) { throw 'Windows DXGI export contract changed; rebuild before installing.' }
 $proxy = Get-PeExportTable -Path $modSource
-if ($proxy.ContractSHA256 -cne $manifest.ModExportsSHA256) { throw 'Proxy export manifest does not match the built DLL.' }
+if ($proxy.FileSHA256 -cne $manifest.ModSHA256 -or $proxy.ContractSHA256 -cne $manifest.ModExportsSHA256) {
+    throw 'Proxy changed during validation or differs from its build manifest.'
+}
 Assert-DxgiForwarderTable -Proxy $proxy -System $system.Table
 $modTarget = Join-Path $bin 'dxgi.dll'; $systemTarget = Join-Path $bin 'dxgi_codex_system.dll'
 foreach ($target in @($modTarget, $systemTarget)) { if (Test-Path -LiteralPath $target) { throw "Existing file preserved: $target" } }
-$systemHash = $system.Table.FileSHA256; $modHash = $proxy.FileSHA256; $copiedSystem = $false; $copiedMod = $false
+$systemHash = $system.Table.FileSHA256; $modHash = [string]$manifest.ModSHA256; $copiedSystem = $false; $copiedMod = $false
+Assert-GameClosed
 try {
     [IO.File]::Copy($system.Path, $systemTarget, $false); $copiedSystem = $true
     [IO.File]::Copy($modSource, $modTarget, $false); $copiedMod = $true
