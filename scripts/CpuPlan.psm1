@@ -147,12 +147,12 @@ function Get-CpuLaunchPlan {
         if ($physicalCount -lt 2 -or $rows.Count -le $physicalCount) {
             return New-EmptyCpuPlan $Manufacturer 'Ryzen SMT is not exposed with at least two physical cores; no worker-budget change is needed.' 1
         }
-        $description = 'Experimental AMD Ryzen: {0} physical cores / {1} logical processors; -corelimit={0}, with normal Windows scheduling and no affinity restriction. No AMD gameplay validation yet.' -f $physicalCount,$rows.Count
+        $description = 'AMD Ryzen: {0} physical cores / {1} logical processors; -corelimit={0}, with normal Windows scheduling and no affinity restriction. No AMD gameplay validation yet.' -f $physicalCount,$rows.Count
         return [pscustomobject]@{ Apply = $true; ApplyAffinity = $false; Applicable = $true; IsIntelHybrid = $false; IsAmdWorkerBudget = $true; Experimental = $true; Manufacturer = $Manufacturer; ProcessorName = $ProcessorName
             Description = $description; Reason = $description; GroupCount = 1; AffinityMask = [uint64]0; AffinityMaskHex = $null
             CoreLimit = $physicalCount; PerformancePhysicalCores = 0; PerformanceLogicalProcessors = 0
             TotalPhysicalCores = $physicalCount; TotalLogicalProcessors = $rows.Count; EfficiencyClass = $null
-            Notes = @('Experimental Ryzen worker budget based on physical core count; Maneater gameplay has not been tested on AMD hardware.',
+            Notes = @('Ryzen worker budget based on physical core count; Maneater gameplay has not been tested on AMD hardware.',
                 'All cores and SMT siblings remain available to Windows scheduling; no CCD, cache or preferred-core affinity is imposed.',
                 'Dynamic parking and differing classes between physical cores do not change the worker budget.',
                 'AMD recommends physical core count as an initial worker-pool budget: https://gpuopen.com/learn/cpu-core-count-detection-windows/') }
@@ -284,7 +284,7 @@ function New-GameLaunchPlan {
             $null -eq $CpuPlan.PSObject.Properties['ProcessorName'] -or $CpuPlan.IsAmdWorkerBudget -isnot [bool] -or
             $CpuPlan.Experimental -isnot [bool] -or -not $CpuPlan.IsAmdWorkerBudget -or -not $CpuPlan.Experimental -or
             $CpuPlan.Manufacturer -ine 'AuthenticAMD' -or $CpuPlan.ProcessorName -notmatch '(?i:\bRyzen\b)')) {
-            throw 'Worker-only CPU plan must explicitly identify an experimental AMD Ryzen budget.'
+            throw 'Worker-only CPU plan must explicitly identify an AMD Ryzen physical-core budget.'
         }
         if (-not $applyAffinity -and ($null -eq $CpuPlan.PSObject.Properties['TotalPhysicalCores'] -or
             $null -eq $CpuPlan.PSObject.Properties['TotalLogicalProcessors'] -or $CpuPlan.TotalPhysicalCores -notmatch '^\d+$' -or

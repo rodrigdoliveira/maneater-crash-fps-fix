@@ -39,6 +39,28 @@ try{
     Assert-OldTuple $case $old 'restore returns exact previous private DLL, helper and system'
     Assert-Test ((Hash $owner) -ceq $ownerHash -and (Hash $oldBackup) -ceq $oldBackupHash -and -not [IO.File]::Exists((Join-Path $case.Root '.local\installation.json'))) 'old private ownership and backups untouched'
 
+    $case=New-Scenario 'tested-preview-upgrade';$old=New-KnownPrivate $case
+    & $case.Module {param($DllHash,$HelperHash)
+        $script:PrivateLoadingModHash='0'*64;$script:PrivateLoadingHelperHash='0'*64
+        $script:PreviewV07ModHash=$DllHash;$script:PreviewV07HelperHash=$HelperHash
+    } $old.DllHash $old.HelperHash
+    $journal=Invoke-Case $case
+    Assert-Test ($journal.Plan.Native.Action -ceq 'ReplaceRecognized' -and (Hash $journal.Plan.Native.BackupHelper) -ceq $old.HelperHash) 'tested preview pair upgrades with a matching helper backup'
+    Restore-Case $case|Out-Null
+    Assert-OldTuple $case $old 'tested preview upgrade restores exact previous tuple'
+
+    foreach($mode in @('mismatched-helper','untested-game')){
+        $case=New-Scenario ('preview-'+$mode);$old=New-KnownPrivate $case
+        & $case.Module {param($DllHash,$HelperHash)
+            $script:PrivateLoadingModHash='0'*64;$script:PrivateLoadingHelperHash='0'*64
+            $script:PreviewV07ModHash=$DllHash;$script:PreviewV07HelperHash=$HelperHash
+        } $old.DllHash $old.HelperHash
+        if($mode -eq 'mismatched-helper'){[IO.File]::WriteAllText($old.Helper,'foreign helper');$old.HelperHash=Hash $old.Helper}
+        else{$bytes=[IO.File]::ReadAllBytes($case.Exe);$bytes[1023]=1;[IO.File]::WriteAllBytes($case.Exe,$bytes)}
+        Assert-Throws {Invoke-Case $case -AllowUntestedBuild} "$mode preview pair refused before mutation"
+        Assert-OldTuple $case $old "$mode preview files remain intact"
+    }
+
     $case=New-Scenario 'public-upgrade';$dll=Join-Path $case.Bin 'dxgi.dll'
     [IO.File]::WriteAllText($dll,'inert public v0.2');[IO.File]::Copy($case.System,(Join-Path $case.Bin 'dxgi_codex_system.dll'),$false);$oldHash=Hash $dll
     & $case.Module {param($Hash) $script:PublicV02ModHash=$Hash} $oldHash

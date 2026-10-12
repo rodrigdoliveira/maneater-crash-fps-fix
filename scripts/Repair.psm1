@@ -6,6 +6,8 @@ $script:LegacyModHash = '5C9EF79C6F5EBC99DB15E62E883F5635FF4133442BFDE6891D98A38
 $script:PublicV02ModHash = '3D6BE39D601175AD5DC435A68EFB6036C107C0646C94A99300567F82387B660E'
 $script:PrivateLoadingModHash = '03FAD0061DD00A332E2C93CA10FE3ECF2379ADAFBEBE7A59A2FFDE384A11E744'
 $script:PrivateLoadingHelperHash = 'B1399B39E4CA9E7E1C48F761AFA42FB0649A239F7EC55F6706655FC76FDC21B4'
+$script:PreviewV07ModHash = '85B190F0AD305F9FD0D9C9A676D61B4179FB736F32D6ED3C4BC9E468F80208BF'
+$script:PreviewV07HelperHash = '898C59D575AFF5DD9F6CDB0F46A2DEB5F1700DF80A5DDFE2A86AE1C71B1DCB7A'
 foreach ($name in @('PeExports', 'CpuPlan', 'SteamFix', 'AnselFix')) { Import-Module (Join-Path $PSScriptRoot ($name + '.psm1')) -Force -DisableNameChecking }
 function Get-RepairHash { param([string]$Path) (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
 function Write-RepairJson {
@@ -72,7 +74,7 @@ function Test-RepairAnselSkipped {
 function Get-RepairBuildReady {
     try {
         $manifest = Get-Content -LiteralPath (Join-Path $script:Root 'dist\build.json') -Raw | ConvertFrom-Json
-        if ($manifest.SchemaVersion -ne 1 -or $manifest.Version -cne '0.7.0-preview.1' -or $manifest.GameSHA256 -cne $script:SupportedGameHash -or $manifest.TargetFPS -ne 120 -or $manifest.HelperSHA256 -cnotmatch '^[0-9A-F]{64}$') { return $false }
+        if ($manifest.SchemaVersion -ne 1 -or $manifest.Version -cne '0.7.0' -or $manifest.GameSHA256 -cne $script:SupportedGameHash -or $manifest.TargetFPS -ne 120 -or $manifest.HelperSHA256 -cnotmatch '^[0-9A-F]{64}$') { return $false }
         $sources = [Collections.Generic.List[string]]::new()
         foreach ($folder in @('src','vendor')) {
             $directory = Join-Path $script:Root $folder
@@ -132,6 +134,7 @@ function Get-NativeRepairPlan {
         } else {
             $known = (-not $helperPresent) -and ($oldModHash -ceq $script:LegacyModHash -or $oldModHash -ceq $script:PublicV02ModHash)
             $known = $known -or ((Test-RepairGameTested $Game) -and $oldModHash -ceq $script:PrivateLoadingModHash -and $oldHelperHash -ceq $script:PrivateLoadingHelperHash)
+            $known = $known -or ((Test-RepairGameTested $Game) -and $oldModHash -ceq $script:PreviewV07ModHash -and $oldHelperHash -ceq $script:PreviewV07HelperHash)
             if (Get-RepairBuildReady) {
                 $build = Get-Content -LiteralPath (Join-Path $script:Root 'dist\build.json') -Raw | ConvertFrom-Json
                 $knownCurrent = $oldModHash -ceq $build.ModSHA256 -and $oldHelperHash -ceq $build.HelperSHA256
@@ -176,7 +179,7 @@ function Test-ManeaterRepairState {
         if ((Get-RepairHash (Join-Path $game.Bin 'dxgi.dll')) -cne $Journal.Plan.Native.InstalledHash -or
             (Get-RepairHash (Join-Path $game.Bin 'dxgi_codex_system.dll')) -cne $Journal.Plan.Native.InstalledSystemHash) { throw 'The native mod files changed or were removed.' }
         if ($null -eq $Journal.Plan.Native.PSObject.Properties['InstalledHelperHash'] -or
-            (Get-RepairHash (Join-Path $game.Bin 'ManeaterAreaHelper.exe')) -cne $Journal.Plan.Native.InstalledHelperHash) { throw 'The native helper is missing, changed, or belongs to an older setup. Restore, then apply this preview.' }
+            (Get-RepairHash (Join-Path $game.Bin 'ManeaterAreaHelper.exe')) -cne $Journal.Plan.Native.InstalledHelperHash) { throw 'The native helper is missing, changed, or belongs to an older setup. Restore, then apply this release.' }
         if ((Get-VerifiedWindowsDxgi).Table.FileSHA256 -cne $Journal.Plan.Native.InstalledSystemHash) { throw 'Windows updated its DXGI library.' }
         $context=Get-SteamFixContext -Context $Journal.Plan.SteamContext
         Assert-SteamManeaterInstallation -Context $context -GameRoot $game.GameRoot | Out-Null
@@ -340,7 +343,7 @@ function Invoke-ManeaterRepair {
         }
         if ($prior.Status -ne 'restored') { throw 'An interrupted repair needs recovery. Click Restore, then apply again.' }
     }
-    if(-not $selected.TestedBuild -and -not $AllowUntestedBuild){throw 'Untested Maneater build. Enable Allow an untested build (experimental) to try it. No changes made.'}
+    if(-not $selected.TestedBuild -and -not $AllowUntestedBuild){throw 'Untested Maneater build. Enable Allow an untested build to try it. No changes made.'}
     & $Progress 'Checking the game, Steam settings, and CPU topology...'
     $plan = Get-ManeaterRepairPlan -GameExecutable $GameExecutable -SteamContext $SteamContext
     if (-not $plan.BuildReady) {

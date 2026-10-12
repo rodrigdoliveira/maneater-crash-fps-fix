@@ -18,7 +18,7 @@ if(-not [string]::IsNullOrWhiteSpace($SteamContextPath)){
     $script:initialSteamContext=Get-Content -LiteralPath $contextFile -Raw|ConvertFrom-Json
 }
 $form = New-Object Windows.Forms.Form
-$form.Text = 'Maneater Crash & FPS Fix - 0.7.0-preview.1 (local)'
+$form.Text = 'Maneater Crash & FPS Fix - 0.7.0'
 $form.StartPosition = 'CenterScreen'
 $form.ClientSize = New-Object Drawing.Size(860,740)
 $form.MinimumSize = New-Object Drawing.Size(820,780)
@@ -38,23 +38,23 @@ function Set-FixRow { param([string]$Name,[string]$Status,[string]$Detail) $item
 function Show-DefaultRows {
     $list.Items.Clear()
     Set-FixRow 'Native FPS fix' 'Waiting' 'Installs the included mod; compatible engine calls redirect 60 FPS to 120 FPS.'
-    Set-FixRow 'Character recovery' 'Preview' 'Avoids repeated recovery-animation evaluation on the guarded path.'
-    Set-FixRow 'Navigation' 'Preview' 'Filters impossible connections while preserving native navigation results.'
-    Set-FixRow 'Package loading' 'Preview' 'Removes unused temporary string work; original loading remains in control.'
+    Set-FixRow 'Character recovery' 'Waiting' 'Avoids repeated recovery-animation evaluation on the guarded path.'
+    Set-FixRow 'Navigation' 'Waiting' 'Filters impossible connections while preserving native navigation results.'
+    Set-FixRow 'Package loading' 'Waiting' 'Removes unused temporary string work; original loading remains in control.'
     Set-FixRow 'OpenSSL crash fix' 'Waiting' 'Sets the official compatibility flag for Maneater only.'
     Set-FixRow 'CPU scheduling' 'Detecting' 'Chooses performance cores and worker count where applicable.'
     Set-FixRow 'Ansel' 'Waiting' 'Disables the bundled photo-mode SDK; restore is available.'
     Set-FixRow 'Steam overlay' 'Waiting' 'Disables the overlay for Maneater only.'
 }
 Show-DefaultRows
-$untested = New-Object Windows.Forms.CheckBox; $untested.Text='Allow an untested build (experimental)'; $untested.SetBounds(24,442,650,24); $untested.Enabled=$false; $untested.Checked=-not $DisallowUntestedBuild; $form.Controls.Add($untested)
+$untested = New-Object Windows.Forms.CheckBox; $untested.Text='Allow an untested build'; $untested.SetBounds(24,442,650,24); $untested.Enabled=$false; $untested.Checked=-not $DisallowUntestedBuild; $form.Controls.Add($untested)
 $status = Add-Label 'Select Maneater.exe or Maneater-Win64-Shipping.exe to get started.' 24 478 812 48
 $status.Font = New-Object Drawing.Font('Segoe UI',10,[Drawing.FontStyle]::Bold)
 $bar = New-Object Windows.Forms.ProgressBar; $bar.SetBounds(24,542,812,7); $bar.Style='Blocks'; $bar.Anchor='Bottom,Left,Right'; $form.Controls.Add($bar)
 $apply = New-Object Windows.Forms.Button; $apply.Text='Apply all fixes'; $apply.SetBounds(24,574,190,42); $apply.BackColor=[Drawing.Color]::FromArgb(20,98,155); $apply.ForeColor=[Drawing.Color]::White; $apply.FlatStyle='Flat'; $apply.Enabled=$false; $apply.Anchor='Bottom,Left'; $form.Controls.Add($apply)
 $play = New-Object Windows.Forms.Button; $play.Text='Play Maneater'; $play.SetBounds(230,574,180,42); $play.Enabled=$false; $play.Anchor='Bottom,Left'; $form.Controls.Add($play)
 $restore = New-Object Windows.Forms.Button; $restore.Text='Restore previous setup'; $restore.SetBounds(590,574,246,42); $restore.Enabled=$false; $restore.Anchor='Bottom,Right'; $form.Controls.Add($restore)
-$note = Add-Label 'Local preview: includes compiled mod and helper; no compiler download. New patches have offline checks but need gameplay validation. Installed means files are present; activation is checked at startup. Keep this folder for Restore.' 24 633 812 72
+$note = Add-Label 'Includes the compiled mod and helper; no compiler download. Gameplay tested on the reference Steam build. Installed means files are present; activation is checked at startup. Keep this folder for Restore.' 24 633 812 72
 $note.Anchor='Bottom,Left,Right'; $note.ForeColor=[Drawing.Color]::FromArgb(74,86,101)
 
 function Get-SavedRepair {
@@ -83,9 +83,9 @@ function Show-Plan { param($Plan)
     $script:plan=$Plan; $list.Items.Clear()
     Set-FixRow 'Native FPS fix' $(if($Plan.Native.Action -eq 'None'){'Installed'}else{'Ready'}) 'Activation is checked at game startup; incompatible engine layouts pass through.'
     $previewState=$(if(Test-SelectedBuildTested){if($Plan.Native.Action -eq 'None'){'Installed'}else{'Ready'}}else{'Guarded'})
-    Set-FixRow 'Character recovery' $previewState 'Experimental recovery-animation fast path; exact-build guards required.'
-    Set-FixRow 'Navigation' $previewState 'Experimental scoped connection filter; uncertain queries use original code.'
-    Set-FixRow 'Package loading' $previewState 'Experimental unused-label removal; original package-loading order preserved.'
+    Set-FixRow 'Character recovery' $previewState 'Recovery-animation lookup optimization with compatibility guards.'
+    Set-FixRow 'Navigation' $previewState 'Scoped navigation filter; uncertain queries use original code.'
+    Set-FixRow 'Package loading' $previewState 'Removes unused loading-label work; original loading order preserved.'
     Set-FixRow 'OpenSSL crash fix' 'Ready' 'Official flag applied through this game''s Steam launch options.'
     Set-FixRow 'CPU scheduling' $(if($Plan.Cpu.Apply){'Ready'}else{'Not needed'}) $Plan.Cpu.Description
     if($null -ne $Plan.PSObject.Properties['AnselDisposition'] -and $Plan.AnselDisposition -eq 'SkippedUnknownSDK'){Set-FixRow 'Ansel' 'Skipped' 'Unrecognized SDK preserved; this change will not be applied.'}
@@ -94,13 +94,13 @@ function Show-Plan { param($Plan)
     $tested=Test-SelectedBuildTested
     $untested.Enabled=-not $tested
     if($tested){$status.Text='Tested build found. Apply all applicable fixes in one step.'}
-    else{$status.Text='Untested build. Apply will ask you to accept its experimental warning; FPS may remain inactive.'}
+    else{$status.Text='Untested build. Apply will ask you to accept its compatibility warning; FPS may remain inactive.'}
     Update-ApplyEnabled
 }
 function Request-ExperimentalTrial {
     if(Test-SelectedBuildTested){return $true}
-    if(-not $untested.Checked){$status.Text='Enable Allow an untested build (experimental) before applying.';return $false}
-    $message='This executable was not tested. The tested Steam build is 7837297. Fixes may not work on this version. The FPS hook will activate only if its engine checks pass; incompatible layouts stay inactive. Any unrecognized Ansel SDK is skipped. Backups and Restore remain available. Apply this experimental setup?'
+    if(-not $untested.Checked){$status.Text='Enable Allow an untested build before applying.';return $false}
+    $message='This executable was not tested. The tested Steam build is 7837297. Fixes may not work on this version. The FPS hook will activate only if its engine checks pass; incompatible layouts stay inactive. Any unrecognized Ansel SDK is skipped. Backups and Restore remain available. Apply to this untested build?'
     return [Windows.Forms.MessageBox]::Show($form,$message,'Untested Maneater build','YesNo','Warning','Button2') -eq 'Yes'
 }
 function Request-SteamExit {
@@ -171,11 +171,11 @@ $timer.Add_Tick({
             if ($AutoApply) { $script:AutoApply=$false; if((Request-ExperimentalTrial)-and (Request-SteamExit)){Start-RepairWorker 'Apply'} }
         } elseif ($script:action -eq 'Verify') {
             $apply.Enabled=$false
-            if($result.Result.Valid){$status.Text=$(if(Test-SelectedBuildTested){'Setup is installed. FPS activation is checked when Maneater starts.'}else{'Experimental setup is installed. FPS may remain inactive if engine checks fail.'});$play.Enabled=$true;foreach($row in $list.Items){if($row.SubItems[1].Text -eq 'Ready'){$row.SubItems[1].Text=$(if($row.Text -in @('Native FPS fix','Character recovery','Navigation','Package loading')){'Installed'}else{'Applied'})}}}
+            if($result.Result.Valid){$status.Text=$(if(Test-SelectedBuildTested){'Setup is installed. FPS activation is checked when Maneater starts.'}else{'Setup is installed for this untested build. FPS may remain inactive if engine checks fail.'});$play.Enabled=$true;foreach($row in $list.Items){if($row.SubItems[1].Text -eq 'Ready'){$row.SubItems[1].Text=$(if($row.Text -in @('Native FPS fix','Character recovery','Navigation','Package loading')){'Installed'}else{'Applied'})}}}
             else{$status.Text='The setup changed: '+$result.Result.Reason+' Use Restore, then apply again.'}
         } elseif ($script:action -eq 'Apply') {
             $script:plan=$result.Result.Plan
-            $status.Text=$(if(Test-SelectedBuildTested){'Setup installed. Play Maneater; FPS activation is checked at startup.'}else{'Experimental setup installed. FPS may remain inactive if engine checks fail.'}); $play.Enabled=$true; $apply.Enabled=$false
+            $status.Text=$(if(Test-SelectedBuildTested){'Setup installed. Play Maneater; FPS activation is checked at startup.'}else{'Setup installed for this untested build. FPS may remain inactive if engine checks fail.'}); $play.Enabled=$true; $apply.Enabled=$false
             foreach($row in $list.Items){if($row.SubItems[1].Text -eq 'Ready'){$row.SubItems[1].Text=$(if($row.Text -in @('Native FPS fix','Character recovery','Navigation','Package loading')){'Installed'}else{'Applied'})}}
         } else { $status.Text=$(if(@($result.Result.Warnings).Count){'Restored our changes; kept settings you changed afterward.'}else{'Previous setup restored. You can apply the fixes again whenever you want.'}); Show-DefaultRows; $script:plan=$null; $apply.Enabled=$false; if(-not [string]::IsNullOrWhiteSpace($pathBox.Text)){Start-RepairWorker 'Plan'} }
     } catch { $status.Text=$_.Exception.Message; if($null -ne $script:worker -and $script:worker.HasExited){$script:worker.Dispose();$script:worker=$null;Set-Busy $false} }

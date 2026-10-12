@@ -58,7 +58,7 @@ try {
         $sourceHashes[$relative] = (Get-FileHash -LiteralPath (Join-Path $root $relative) -Algorithm SHA256).Hash
     }
     $manifest = [ordered]@{
-        SchemaVersion = 1; Version = '0.7.0-preview.1'; TargetFPS = 120
+        SchemaVersion = 1; Version = '0.7.0'; TargetFPS = 120
         GameSHA256 = 'CC34E43BBD1F757E3883ADAF37D643C1A0FB2963967CA33AF7CB6CB8F54480C0'
         ModSHA256 = (Get-FileHash -LiteralPath $output -Algorithm SHA256).Hash
         HelperSHA256 = $helperHash
@@ -66,7 +66,12 @@ try {
         SystemExportsSHA256 = $system.Table.ContractSHA256; ModExportsSHA256 = $proxy.ContractSHA256
         BuildSystemDLLSHA256 = $system.Table.FileSHA256; SystemExports = @($system.Table.Exports | Select-Object Name, Ordinal)
         SourceHashes = $sourceHashes; Compiler = "Zig $compilerVersion; x86_64-windows-gnu O2; no FP contraction; warnings-as-errors"
-        NativeAttachmentVerified = $false; BenefitVerified = $false
+        GameplayValidation = [ordered]@{
+            UserReportedSuccess = $true; NativeAttachmentObserved = $true
+            TestedModSHA256 = '85B190F0AD305F9FD0D9C9A676D61B4179FB736F32D6ED3C4BC9E468F80208BF'
+            TestedHelperSHA256 = '898C59D575AFF5DD9F6CDB0F46A2DEB5F1700DF80A5DDFE2A86AE1C71B1DCB7A'
+            Scope = 'Same algorithms tested on reference Steam build and one Intel PC; version/docs/log text updated for release.'
+        }
         BuiltUTC = [DateTime]::UtcNow.ToString('o')
     }
     [IO.File]::WriteAllText((Join-Path $dist 'build.json'), ($manifest | ConvertTo-Json -Depth 6) + "`n", [Text.UTF8Encoding]::new($false))

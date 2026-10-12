@@ -1,12 +1,12 @@
 # Maneater Crash & FPS Fix
 
-**Local preview 0.7.0-preview.1.** A free, open-source Windows launcher that applies the existing repair setup and three experimental native optimizations from one window. This preview includes ready-built binaries and their matching full sources. It is a local package; no new GitHub release is required.
+A free, open-source Windows launcher that applies the Maneater crash/FPS repair setup and native recovery, navigation and loading optimizations from one window. **v0.7.0** includes ready-built binaries and their matching full sources.
 
-The current private build already contains the same get-up, navigation and package-loading algorithms. This preview brings them into the normal launcher, upgrade and restore workflow; repackaging them does not establish a new performance improvement.
+The v0.7.0 algorithms passed gameplay testing on the reference Steam build. The tester reported that they worked great, and startup logs confirmed recovery, navigation, loading and FPS attachment. See [the validation record](docs/gameplay-validation.md).
 
-## Run the local preview
+## Download and run
 
-1. Extract the supplied **local ready-to-run preview ZIP** into a folder you will keep.
+1. [Download **Maneater-Crash-FPS-Fix.zip**](https://github.com/rodrigdoliveira/maneater-crash-fps-fix/releases/latest/download/Maneater-Crash-FPS-Fix.zip) and extract it into a folder you will keep.
 2. Quit Maneater and double-click **Start.cmd**.
 3. Wait for automatic detection, then click **Apply all fixes**. If the game is not found or there are multiple installations, use **Choose game...** to select **Maneater.exe** or **Maneater-Win64-Shipping.exe**.
 4. Click **Play Maneater** to start it through Steam.
@@ -25,11 +25,11 @@ The established v0.6.0 repair setup is retained:
 | --- | --- |
 | Native FPS correction | Redirects the guarded engine's 60 FPS request to 120 through its original setter. Other requests and graphics-quality settings are preserved. This does not guarantee 120 rendered frames per second. |
 | OpenSSL compatibility | Applies the existing OpenSSL compatibility flag through game-specific Steam launch options. |
-| CPU scheduling and worker budget | Uses detected hardware to choose the worker budget. Supported Intel hybrid CPUs also use performance-core affinity; eligible Ryzen SMT CPUs get an experimental physical-core budget without an affinity mask. |
+| CPU scheduling and worker budget | Uses detected hardware to choose the worker budget. Supported Intel hybrid CPUs also use performance-core affinity; eligible Ryzen SMT CPUs get an physical-core budget without an affinity mask. |
 | Ansel SDK | Reversibly disables the recognized bundled NVIDIA Ansel SDK, removing its photo-mode support. Unknown or already absent/disabled copies are preserved. |
 | Steam overlay | Turns off the overlay for Maneater only. |
 
-The preview adds these exact-build experimental changes:
+v0.7.0 adds these native optimizations with compatibility guards:
 
 | Optimization | What it changes |
 | --- | --- |
@@ -43,17 +43,17 @@ A matching **ManeaterAreaHelper.exe** starts hidden during game startup, verifie
 
 ## What changed from v0.6.0
 
-v0.6.0 already included the 120 FPS correction, Intel and experimental Ryzen CPU plans, OpenSSL flag, Ansel/overlay changes, game detection, backup/restore and the preselected untested-build option. Those are not new in this preview.
+v0.6.0 already included the 120 FPS correction, Intel and Ryzen CPU plans, OpenSSL flag, Ansel/overlay changes, game detection, backup/restore and the preselected untested-build option. Those are retained in v0.7.0.
 
 The three rows above are the additions. Navigation's earlier private V1 and the included V2 are stages of one optimization: V2 groups the same temporary index by direction and retains V1's conservative rejection conditions. There are not two separate navigation fixes.
 
-The failed recovery-event asset guard and later speculative queue, persistent-cache, get-up compaction and string-search experiments are not included. See [the preview release notes](docs/release-notes-0.7.0-preview.1.md) for the comparison and evidence limits.
+The failed recovery-event asset guard and later speculative queue, persistent-cache, get-up compaction and string-search experiments are not included. See [the v0.7.0 release notes](docs/release-notes-0.7.0.md) for the comparison and evidence limits.
 
 ## Upgrade and restore
 
-For an upgrade, extract the preview into a **new folder** and run its launcher. The new folder can recognize and back up the reviewed v0.6.0 and latest private native files already beside the game. Keep the earlier launcher folder and its recovery records too. If you reuse a folder with an already applied repair journal, first use that folder's old launcher to **Restore previous setup**, then replace its package files and apply the preview. An existing applied journal is not an automatic upgrade.
+For an upgrade, extract v0.7.0 into a **new folder** and run its launcher. The new folder can recognize and back up the reviewed v0.6.0, v0.7.0-preview.1 and latest private native files already beside the game. Keep the earlier launcher folder and its recovery records too. If you reuse a folder with an already applied repair journal, first use that folder's old launcher to **Restore previous setup**, then replace its package files and apply v0.7.0. An existing applied journal is not an automatic upgrade.
 
-**Apply all fixes** recognizes the reviewed public native v0.2 pair used by v0.6.0 and the known private predecessor pairs. It backs up the recognized previous files and records the complete installed tuple, including whether a helper existed. Unknown DLLs/helpers or conflicting ownership records are preserved by refusing replacement.
+**Apply all fixes** recognizes the reviewed public native v0.2 pair used by v0.6.0 and the reviewed v0.7.0-preview.1 and private predecessor pairs. It backs up the recognized previous files and records the complete installed tuple, including whether a helper existed. Unknown DLLs/helpers or conflicting ownership records are preserved by refusing replacement.
 
 **Restore previous setup** restores the complete previous owned setup from that record, including the previous DLL/helper tuple and launcher-managed settings. If another tool has changed a tracked file or setting, restore preserves that change instead of blindly overwriting it. Backups and ownership records are part of the installation; keep them with the launcher.
 
@@ -74,8 +74,8 @@ The launcher therefore changes **both where the game runs and the core count it 
 | --- | --- |
 | Intel Core i9-13900K, as tested: 8 performance cores + 16 efficiency cores | Runs Maneater on the 8 performance cores, including their 16 logical threads, and sets `-corelimit=8`. The engine's budget then matches the physical performance cores selected for the game. |
 | Another supported Intel hybrid CPU with 6 performance cores | Detects that CPU's actual core mapping, selects its performance cores and sets `-corelimit=6`. It does not copy the test PC's settings. |
-| Ryzen with 6 physical cores / 12 logical threads | Experimentally sets `-corelimit=6`. All CPU threads remain available to Windows; no affinity mask is imposed. |
-| Ryzen with 16 physical cores / 32 logical threads | Uses the same experimental approach with `-corelimit=16`, without pinning the game to one group of cores or disabling SMT. |
+| Ryzen with 6 physical cores / 12 logical threads | Sets `-corelimit=6`. All CPU threads remain available to Windows; no affinity mask is imposed. |
+| Ryzen with 16 physical cores / 32 logical threads | Uses the same worker-budget approach with `-corelimit=16`, without pinning the game to one group of cores or disabling SMT. |
 
 The Ryzen approach aims to reduce competition between workers sharing physical cores. It follows [AMD's guidance on choosing a starting thread-pool budget](https://gpuopen.com/learn/cpu-core-count-detection-windows/), but **has not been tested in Maneater gameplay on AMD hardware** and may improve or worsen performance. Unsupported or unclear CPU layouts keep their normal settings. These changes apply to Maneater's launch, preserve graphics quality, and can be reversed with **Restore previous setup**.
 
@@ -90,7 +90,7 @@ CC34E43BBD1F757E3883ADAF37D643C1A0FB2963967CA33AF7CB6CB8F54480C0
 
 The navigation and package-loading helper requires this full executable hash plus exact native code and caller guards. The get-up replacement instead checks the reference PE metadata, exact code, function identity and reflected field layout; it does not hash the whole executable. A different file hash that retains those checked values can still activate the getter. Such a build remains untested. A copied installation result does not prove any hook activated.
 
-**Allow an untested build (experimental)** remains preselected. Applying to a different executable hash still requires acceptance of its warning. Clear the option to restrict Apply to the reference build. The option does not weaken either the get-up metadata/code/layout checks or the navigation/loading full-hash checks. Navigation and loading therefore stay inactive on a different hash; get-up can attach only if its separate strict checks pass. The inherited FPS component may accept its own narrow experimental checks, or remain inactive too. The other launch workarounds remain unverified on that build.
+**Allow an untested build** remains preselected. Applying to a different executable hash still requires acceptance of its warning. Clear the option to restrict Apply to the reference build. The option does not weaken either the get-up metadata/code/layout checks or the navigation/loading full-hash checks. Navigation and loading therefore stay inactive on a different hash; get-up can attach only if its separate strict checks pass. The inherited FPS component may accept its own guarded opt-in checks, or remain inactive too. The other launch workarounds remain unverified on that build.
 
 Detection and untested-build opt-in are limited to Maneater installations in the current Steam libraries; they do not establish support for Epic, Game Pass or another storefront. CPU plans are derived from Windows topology, with no developer-PC affinity mask, core count or GPU requirement copied into the launcher.
 
@@ -98,13 +98,13 @@ The compiled proxy's DXGI names and ordinals must match the local Windows librar
 
 ## Results and limits
 
-The earlier repair approach had sessions reported as smoother and crash-free on one Intel PC, but later combat and loading hitches remained. Those sessions do not validate the new native optimizations or prove that an individual workaround prevents crashes.
+The combined v0.7.0 algorithms were tested during gameplay on the reference Steam build and one Intel PC. The tester reported that they worked great. Logs from that test confirmed the recovery getter, navigation and package-loading hooks attached, and the FPS correction redirected the matching request from 60 to 120.
 
-The added changes have static-code review and offline tests for forwarding, array ownership, conservative navigation decisions, x64 unwind behavior, installation, restoration and attachment rollback. The current combined algorithms have no verified gameplay benefit or real-game attachment result in the reviewed build manifest. Synthetic timing gains are not FPS or loading-time measurements.
+Static-code review and offline tests cover forwarding, array ownership, conservative navigation decisions, x64 unwind behavior, installation, restoration and attachment rollback. Gameplay feedback supports the combined setup; it does not measure a percentage improvement or isolate the contribution of each patch. [Validation details](docs/gameplay-validation.md) record the tested binaries and scope.
 
 The get-up replacement has a specific semantic uncertainty: the original chest-down wrapper was not fully recovered. Verified metadata and a readable sibling support the replacement, but unknown behavior could differ. The navigation index adds build/allocation cost and depends on stable geometry within its short scope; some searches can be slower. Removing the unused loading string changes allocation statistics and allocation-failure timing. The external attachment transaction retains a possible new-thread race after its last thread census.
 
-This is an experimental preview, not a guarantee of crash-free play, eliminated stutters or identical improvements on every machine. It retains current visuals as its design goal; the unresolved get-up equivalence limits mean exact animation behavior has not been proved. Use **Restore previous setup** if it causes problems.
+Results vary by hardware and build. The release keeps graphics-quality settings intact; exact animation equivalence remains subject to the getter analysis limit above. Use **Restore previous setup** if the setup causes problems.
 
 ## Check startup status
 

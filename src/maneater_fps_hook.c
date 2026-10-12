@@ -398,7 +398,7 @@ static DWORD WINAPI install_worker(void *unused) {
     getup_start_worker();
     nav_start_worker();
     if (g_experimental_build) {
-        log_line("EXPERIMENTAL: explicit process opt-in allowed different PE metadata; exact fixed-RVA signatures matched. CVar identity/layout guards remain mandatory.");
+        log_line("UNTESTED BUILD: explicit process opt-in allowed different PE metadata; exact fixed-RVA signatures matched. CVar identity/layout guards remain mandatory.");
     }
     started = GetTickCount64();
     do {

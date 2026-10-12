@@ -69,7 +69,7 @@ function Update-FixtureManifest {
     foreach ($relative in @('src/maneater_fps_hook.c', 'scripts/PeExports.psm1', 'build.ps1', 'Manage-Mod.ps1')) {
         $hashes[$relative] = (Get-FileHash -LiteralPath (Join-Path $Fixture $relative) -Algorithm SHA256).Hash
     }
-    $manifest = @{ SchemaVersion = 1; Version = '0.7.0-preview.1'; GameSHA256 = $GameHash; TargetFPS = 120; SourceHashes = $hashes
+    $manifest = @{ SchemaVersion = 1; Version = '0.7.0'; GameSHA256 = $GameHash; TargetFPS = 120; SourceHashes = $hashes
         HelperSHA256 = (Get-FileHash -LiteralPath (Join-Path $Fixture 'dist\ManeaterAreaHelper.exe')).Hash
         ModSHA256 = $proxy.FileSHA256; DefinitionSHA256 = (Get-FileHash -LiteralPath (Join-Path $Fixture 'dist\dxgi_proxy.def')).Hash
         SystemExportsSHA256 = $System.Table.ContractSHA256; ModExportsSHA256 = $proxy.ContractSHA256; SystemExports = @($System.Table.Exports | Select-Object Name, Ordinal) }
