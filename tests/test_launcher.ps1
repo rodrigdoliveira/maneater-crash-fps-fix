@@ -47,6 +47,45 @@ try {
         Assert-Test ($colors.Count -gt 20) 'GUI preview contains visible controls and text'
     } finally {$image.Dispose()}
 
+    # Inspect real controls before this isolated GUI disposes them. Preview
+    # must neither discover the user's installation nor start a worker.
+    $launcherPath=Join-Path $fixture 'Launcher.ps1'
+    $guiChecks=@'
+        $snapshot=[ordered]@{DefaultChecked=$untested.Checked;WorkerNotStarted=($null -eq $script:worker)}
+        $fakePlan=[pscustomobject]@{Game=[pscustomobject]@{TestedBuild=$false};Native=[pscustomobject]@{Action='Install'};Cpu=[pscustomobject]@{Apply=$false;Description='fixture CPU'};Ansel=[pscustomobject]@{Action='None'}}
+        Show-Plan $fakePlan
+        $snapshot.UnknownKeepsDefault=($untested.Checked -eq (-not $DisallowUntestedBuild))
+        $untested.Checked=$false;Show-Plan $fakePlan
+        $snapshot.UncheckedPersists=(-not $untested.Checked -and -not $apply.Enabled)
+        $untested.Checked=$true
+        $snapshot.CheckedAllowsApply=$apply.Enabled
+        $script:steamExitPending=$true;$untested.Checked=$false;$untested.Checked=$true
+        $snapshot.BusyKeepsApplyDisabled=(-not $apply.Enabled);$script:steamExitPending=$false
+        $fakePlan.Game.TestedBuild=$true;Show-Plan $fakePlan
+        $snapshot.TestedKeepsChecked=($untested.Checked -and -not $untested.Enabled)
+        [IO.File]::WriteAllText((Join-Path $local 'gui-state.json'),($snapshot|ConvertTo-Json))
+'@
+    $guiSource=[IO.File]::ReadAllText($launcherPath)
+    $anchor='        $bitmap=New-Object Drawing.Bitmap($form.Width,$form.Height)'
+    if(-not $guiSource.Contains($anchor)){throw 'GUI inspection insertion point missing.'}
+    [IO.File]::WriteAllText($launcherPath,$guiSource.Replace($anchor,$guiChecks+"`n"+$anchor),[Text.UTF8Encoding]::new($false))
+    foreach($disallow in @($false,$true)){
+        $args=@('-NoProfile','-STA','-ExecutionPolicy','Bypass','-File',$launcherPath,'-RenderPreview')
+        if($disallow){$args+='-DisallowUntestedBuild'}
+        & $powershell @args
+        Assert-Test ($LASTEXITCODE -eq 0) 'GUI state probe completes without discovery or game input'
+        $state=Get-Content (Join-Path $fixture '.local\gui-state.json') -Raw|ConvertFrom-Json
+        Assert-Test ($state.DefaultChecked -eq (-not $disallow) -and $state.WorkerNotStarted -and $state.UnknownKeepsDefault) 'preselection and explicit opt-out survive startup and unknown plan'
+        Assert-Test ($state.UncheckedPersists -and $state.CheckedAllowsApply -and $state.BusyKeepsApplyDisabled -and $state.TestedKeepsChecked) 'checkbox selection, busy guard and tested-build display use real control state'
+    }
+
+    # Route Detect through the real worker and an isolated installation-path
+    # provider. No real registry, Steam account or game is consulted.
+    $steamCopy=Join-Path $fixture 'scripts\SteamFix.psm1'
+    [IO.File]::AppendAllText($steamCopy,"`nfunction Get-SteamInstallDirectories { return @() }`n")
+    $detected=Run-Request 'Detect'
+    Assert-Test ($detected.Success -and -not $detected.Result.Found -and $detected.Result.Reason -like '*Choose game*') 'worker detection returns actionable manual-selection fallback'
+
     # Exercise the actual worker's JSON/request boundary with a recording
     # backend in this isolated COPY. The real repair/backend is separately
     # covered by test_repair.ps1; these cases never probe Steam or a game.

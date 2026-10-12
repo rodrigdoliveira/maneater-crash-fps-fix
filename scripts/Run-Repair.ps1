@@ -13,6 +13,11 @@ try {
     try { $lock = [IO.File]::Open((Join-Path $root '.local\repair.lock'), 'OpenOrCreate', 'ReadWrite', 'None') }
     catch { throw 'Another repair operation is running. Wait for it to finish, then retry.' }
     switch ($request.Action) {
+        'Detect' {
+            & $progress 'Looking for Maneater in Steam libraries...'
+            Import-Module (Join-Path $PSScriptRoot 'SteamFix.psm1') -Force
+            $result=Find-SteamManeaterExecutable
+        }
         'Plan' { & $progress 'Checking the selected game...'; $result = Get-ManeaterRepairPlan -GameExecutable $request.GameExecutable -SteamContext $request.SteamContext }
         'Apply' {
             $allow=$null -ne $request.PSObject.Properties['AllowUntestedBuild'] -and $request.AllowUntestedBuild -is [bool] -and $request.AllowUntestedBuild

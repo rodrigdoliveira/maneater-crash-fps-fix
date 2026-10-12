@@ -469,4 +469,80 @@ function Assert-SteamManeaterInstallation {
     return [pscustomobject]@{ Validated=$true; AppId='629820'; GameRoot=$selected; LibraryPath=$matches[0].LibraryPath;
         AppManifestPath=$matches[0].ManifestPath; AppManifestSHA256=$matches[0].ManifestSHA256; LibraryFoldersSHA256=$libraryHash }
 }
-Export-ModuleMember -Function Get-SteamFixContext,Get-SteamFixStatus,New-SteamFixPlan,Invoke-SteamFixPlan,Restore-SteamFix,Assert-SteamManeaterInstallation
+function Get-SteamInstallDirectories {
+    # Installation discovery needs no Steam account or running client.
+    $paths=@()
+    foreach($source in @(
+        @{Hive=[Microsoft.Win32.Registry]::CurrentUser;Key='Software\Valve\Steam'},
+        @{Hive=[Microsoft.Win32.Registry]::LocalMachine;Key='SOFTWARE\Valve\Steam'},
+        @{Hive=[Microsoft.Win32.Registry]::LocalMachine;Key='SOFTWARE\WOW6432Node\Valve\Steam'})) {
+        $key=$source.Hive.OpenSubKey($source.Key)
+        if($null -ne $key){try{foreach($name in @('SteamPath','InstallPath')){$value=[string]$key.GetValue($name);if(-not [string]::IsNullOrWhiteSpace($value)){$paths+=$value}}}finally{$key.Dispose()}}
+    }
+    foreach($name in @('ProgramFiles(x86)','ProgramFiles')){
+        $directory=[Environment]::GetEnvironmentVariable($name)
+        if(-not [string]::IsNullOrWhiteSpace($directory)){$paths+=Join-Path $directory 'Steam'}
+    }
+    return $paths
+}
+function Find-SteamManeaterExecutable {
+    [CmdletBinding()]
+    param([string[]]$SteamDirectories)
+    if(-not $PSBoundParameters.ContainsKey('SteamDirectories')){$SteamDirectories=@(Get-SteamInstallDirectories)}
+    $roots=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $games=New-Object 'System.Collections.Generic.Dictionary[string,string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach($directory in $SteamDirectories){
+        if([string]::IsNullOrWhiteSpace($directory) -or -not [IO.Path]::IsPathRooted($directory)){continue}
+        try{$steam=Normalize-SteamFixDirectory $directory}catch{continue}
+        if(-not $roots.Add($steam) -or -not [IO.Directory]::Exists($steam)){continue}
+        $libraries=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+        $libraries.Add($steam)|Out-Null
+        $libraryFile=Join-Path $steam 'steamapps\libraryfolders.vdf'
+        if([IO.File]::Exists($libraryFile)){
+            try{
+                $file=Read-SteamFixFile $libraryFile
+                $node=[ManeaterCrashFpsFix.SteamVdf]::Container($file.Tree,'libraryfolders')
+                foreach($pair in $node.Pairs){
+                    if($pair.Key.Value -notmatch '^\d+$'){continue}
+                    $pathPair=$pair
+                    if($null -ne $pair.Child){$pathPair=[ManeaterCrashFpsFix.SteamVdf]::Unique($pair.Child,'path',$true)}
+                    if($null -eq $pathPair.Value -or $pathPair.Value.UnknownEscape -or -not [IO.Path]::IsPathRooted($pathPair.Value.Value)){continue}
+                    $libraries.Add((Normalize-SteamFixDirectory $pathPair.Value.Value))|Out-Null
+                }
+            }catch{
+                # A conventional folder can still be suggested. Normal Plan
+                # independently validates all Steam metadata before Apply.
+            }
+        }
+        foreach($library in $libraries){
+            $gameRoots=@((Join-Path $library 'steamapps\common\Maneater'))
+            $manifestPath=Join-Path $library 'steamapps\appmanifest_629820.acf'
+            if([IO.File]::Exists($manifestPath)){
+                try{
+                    $manifest=Read-SteamFixFile $manifestPath
+                    $app=[ManeaterCrashFpsFix.SteamVdf]::Container($manifest.Tree,'AppState')
+                    $id=[ManeaterCrashFpsFix.SteamVdf]::Unique($app,'appid',$true)
+                    $install=[ManeaterCrashFpsFix.SteamVdf]::Unique($app,'installdir',$true)
+                    if($null -ne $id.Value -and -not $id.Value.UnknownEscape -and $id.Value.Value -ceq '629820' -and
+                        $null -ne $install.Value -and -not $install.Value.UnknownEscape){
+                        $folder=$install.Value.Value
+                        if(-not [string]::IsNullOrWhiteSpace($folder) -and $folder -notin @('.','..') -and $folder.IndexOfAny([char[]]'\/') -lt 0 -and -not [IO.Path]::IsPathRooted($folder)){
+                            $gameRoots+=Join-Path $library ('steamapps\common\'+$folder)
+                        }
+                    }
+                }catch{}
+            }
+            foreach($gameRoot in $gameRoots){
+                $shipping=Join-Path $gameRoot 'Maneater\Binaries\Win64\Maneater-Win64-Shipping.exe'
+                if(-not [IO.File]::Exists($shipping)){continue}
+                $launcher=Join-Path $gameRoot 'Maneater.exe'
+                $exe=$(if([IO.File]::Exists($launcher)){$launcher}else{$shipping})
+                $games[(Normalize-SteamFixDirectory $gameRoot)]=$exe
+            }
+        }
+    }
+    if($games.Count -eq 1){return [pscustomobject]@{Found=$true;Executable=@($games.Values)[0];Reason='Maneater found. Checking the installation...'}}
+    $reason=$(if($games.Count -gt 1){'Multiple Maneater installations found. Use Choose game to select yours.'}else{'Maneater was not found automatically. Use Choose game to locate it.'})
+    return [pscustomobject]@{Found=$false;Executable=$null;Reason=$reason}
+}
+Export-ModuleMember -Function Get-SteamFixContext,Get-SteamFixStatus,New-SteamFixPlan,Invoke-SteamFixPlan,Restore-SteamFix,Assert-SteamManeaterInstallation,Find-SteamManeaterExecutable

@@ -28,7 +28,7 @@ Do not post game or Windows binaries, saves, installation records, crash dumps o
 - Explain the concrete problem and resulting behavior.
 - Preserve the original setter's ABI, flags, callbacks and unrelated requests.
 - Keep exact compatibility guards and safe forwarding for unrecognized runtime states.
-- Keep tested-build checks as the default. Experimental use must be explicit, accepted for each apply, restricted to a verified Steam installation, and recorded with the actual game hash. It must preserve runtime layout/caller and file-ownership safeguards.
+- Check the build identity every time. The GUI preselects the experimental option, but an untested apply still requires acceptance of its warning; command-line installation requires an explicit flag. Keep the verified Steam installation, recorded game hash, runtime layout/caller and file-ownership safeguards.
 - Preserve existing files during installation and remove only verified, owned files during uninstall.
 - Keep generated binaries, local Windows copies and private test artifacts out of commits.
 

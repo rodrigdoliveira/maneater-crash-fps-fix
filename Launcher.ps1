@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$GameExecutable, [string]$SteamContextPath, [switch]$AutoApply, [switch]$AllowUntestedBuild, [switch]$RenderPreview)
+param([string]$GameExecutable, [string]$SteamContextPath, [switch]$AutoApply, [switch]$AllowUntestedBuild, [switch]$DisallowUntestedBuild, [switch]$RenderPreview)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if (-not [Environment]::Is64BitProcess -or [Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Use Start.cmd on 64-bit Windows.' }
@@ -29,7 +29,7 @@ $form.AutoScaleMode = 'Dpi'
 function Add-Label { param([string]$Text,[int]$X,[int]$Y,[int]$Width,[int]$Height) $control=New-Object Windows.Forms.Label; $control.Text=$Text; $control.SetBounds($X,$Y,$Width,$Height); $form.Controls.Add($control); return $control }
 $title = Add-Label 'Make Maneater smoother. Apply the complete repair.' 24 20 812 38
 $title.Font = New-Object Drawing.Font('Segoe UI',16,[Drawing.FontStyle]::Bold)
-$subtitle = Add-Label 'Choose the game executable, then apply the fixes together. Your current visuals and saves are preserved.' 24 65 812 48
+$subtitle = Add-Label 'Maneater is detected automatically. You can also choose its executable. Your current visuals and saves are preserved.' 24 65 812 48
 $pathBox = New-Object Windows.Forms.TextBox; $pathBox.SetBounds(24,120,682,29); $pathBox.ReadOnly=$true; $pathBox.Anchor='Top,Left,Right'; $form.Controls.Add($pathBox)
 $browse = New-Object Windows.Forms.Button; $browse.Text='Choose game...'; $browse.SetBounds(720,117,116,34); $browse.Anchor='Top,Right'; $form.Controls.Add($browse)
 $list = New-Object Windows.Forms.ListView; $list.SetBounds(24,171,812,198); $list.View='Details'; $list.FullRowSelect=$true; $list.GridLines=$false; $list.HeaderStyle='Nonclickable'; $list.ShowItemToolTips=$true; $list.Anchor='Top,Left,Right'; $form.Controls.Add($list)
@@ -44,7 +44,7 @@ function Show-DefaultRows {
     Set-FixRow 'Steam overlay' 'Waiting' 'Disables the overlay for Maneater only.'
 }
 Show-DefaultRows
-$untested = New-Object Windows.Forms.CheckBox; $untested.Text='Allow an untested build (experimental)'; $untested.SetBounds(24,382,650,24); $untested.Enabled=$false; $untested.Checked=[bool]$AllowUntestedBuild; $form.Controls.Add($untested)
+$untested = New-Object Windows.Forms.CheckBox; $untested.Text='Allow an untested build (experimental)'; $untested.SetBounds(24,382,650,24); $untested.Enabled=$false; $untested.Checked=-not $DisallowUntestedBuild; $form.Controls.Add($untested)
 $status = Add-Label 'Select Maneater.exe or Maneater-Win64-Shipping.exe to get started.' 24 418 812 48
 $status.Font = New-Object Drawing.Font('Segoe UI',10,[Drawing.FontStyle]::Bold)
 $bar = New-Object Windows.Forms.ProgressBar; $bar.SetBounds(24,482,812,7); $bar.Style='Blocks'; $bar.Anchor='Bottom,Left,Right'; $form.Controls.Add($bar)
@@ -86,8 +86,8 @@ function Show-Plan { param($Plan)
     Set-FixRow 'Steam overlay' 'Ready' 'Disables the overlay for Maneater only.'
     $tested=Test-SelectedBuildTested
     $untested.Enabled=-not $tested
-    if($tested){$untested.Checked=$false;$status.Text='Tested build found. Apply all applicable fixes in one step.'}
-    else{$status.Text='Untested build. Enable the experimental option to try it; FPS may remain inactive.'}
+    if($tested){$status.Text='Tested build found. Apply all applicable fixes in one step.'}
+    else{$status.Text='Untested build. Apply will ask you to accept its experimental warning; FPS may remain inactive.'}
     Update-ApplyEnabled
 }
 function Request-ExperimentalTrial {
@@ -121,7 +121,7 @@ function Request-SteamExit {
 $browse.Add_Click({
     try {
         $picker=New-Object Windows.Forms.OpenFileDialog; $picker.Title='Choose your Maneater executable'; $picker.Filter='Maneater executables|Maneater.exe;Maneater-Win64-Shipping.exe|Executable files|*.exe'
-        if ($picker.ShowDialog($form) -eq 'OK') { $untested.Checked=$false; $pathBox.Text=$picker.FileName; $script:plan=$null; Start-RepairWorker 'Plan' }
+        if ($picker.ShowDialog($form) -eq 'OK') { $pathBox.Text=$picker.FileName; $script:plan=$null; Start-RepairWorker 'Plan' }
         $picker.Dispose()
     } catch { $status.Text=$_.Exception.Message }
 })
@@ -152,10 +152,13 @@ $timer.Add_Tick({
                     $contextFile=Join-Path $local ('steam-context-'+[Guid]::NewGuid().ToString('N')+'.json')
                     [IO.File]::WriteAllText($contextFile,($script:plan.SteamContext|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
                     $arguments='-NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+(Join-Path $root 'Launcher.ps1')+'" -GameExecutable "'+$pathBox.Text+'" -SteamContextPath "'+$contextFile+'" -AutoApply'
-                    if($untested.Checked){$arguments+=' -AllowUntestedBuild'}
+                    if($untested.Checked){$arguments+=' -AllowUntestedBuild'}else{$arguments+=' -DisallowUntestedBuild'}
                     Start-Process -FilePath $powerShell -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden | Out-Null; $form.Close()
                 }
             }
+        } elseif ($script:action -eq 'Detect') {
+            $status.Text=$result.Result.Reason
+            if($result.Result.Found){$pathBox.Text=$result.Result.Executable;Start-RepairWorker 'Plan'}
         } elseif ($script:action -eq 'Plan') {
             Show-Plan $result.Result
             if ($AutoApply) { $script:AutoApply=$false; if((Request-ExperimentalTrial)-and (Request-SteamExit)){Start-RepairWorker 'Apply'} }
@@ -173,11 +176,13 @@ $timer.Add_Tick({
 $timer.Start()
 $form.Add_FormClosing({param($sender,$eventArgs) if($script:steamExitPending -or ($null -ne $script:worker -and -not $script:worker.HasExited)){$eventArgs.Cancel=$true;[Windows.Forms.MessageBox]::Show($form,'Wait for the current operation to finish.','Repair is running','OK','Information')|Out-Null}})
 $form.Add_Shown({
+    if($RenderPreview){return}
     if (-not [string]::IsNullOrWhiteSpace($GameExecutable)) { $pathBox.Text=$GameExecutable; Start-RepairWorker 'Plan' }
     else {
         $saved=Get-SavedRepair
         if($null -ne $saved -and $saved.Status -eq 'applied'){ $pathBox.Text=$saved.Plan.Game.Executable; $script:plan=$saved.Plan; Show-Plan $saved.Plan; $status.Text='Checking the applied repair...'; Start-RepairWorker 'Verify' }
         elseif($null -ne $saved -and $saved.Status -ne 'restored'){ $status.Text='An interrupted operation needs recovery. Click Restore previous setup.'; $restore.Enabled=$true }
+        else{Start-RepairWorker 'Detect'}
     }
 })
 try {

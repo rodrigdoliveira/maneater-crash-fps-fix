@@ -1,14 +1,14 @@
 # Maneater Crash & FPS Fix
 
-A free, open-source Windows launcher that applies the complete Maneater repair setup from one window. Pick the game executable, click **Apply all fixes**, then **Play Maneater**. **Restore previous setup** reverses the changes made by the launcher.
+A free, open-source Windows launcher that applies the complete Maneater repair setup from one window. It finds the game automatically; click **Apply all fixes**, then **Play Maneater**. **Restore previous setup** reverses the changes made by the launcher.
 
 ## Download and run
 
 1. [Download the ready-to-run launcher ZIP](https://github.com/rodrigdoliveira/maneater-crash-fps-fix/releases/latest/download/Maneater-Crash-FPS-Fix.zip) and extract it into a folder you will keep.
 2. Double-click **Start.cmd**.
-3. Select **Maneater.exe** or **Maneater-Win64-Shipping.exe**, then click **Apply all fixes**.
+3. Wait for automatic detection, then click **Apply all fixes**. If the game is not found or there are multiple installations, use **Choose game...** to select **Maneater.exe** or **Maneater-Win64-Shipping.exe**.
 
-The **v0.4.0 ready-to-run release ZIP** includes the compiled project mod and its matching full sources. No compiler or compiler download is required. The launcher validates the included mod, detects your CPU, verifies the game build, backs up the previous setup, and applies the fixes. Manual Steam launch-option edits are not required.
+The ready-to-run release ZIP includes the compiled project mod and its matching full sources. No compiler or compiler download is required. The launcher searches Steam's installation folders and registered libraries, including libraries on other drives and custom folders recorded in the game manifest. It validates the included mod, detects your CPU, verifies the game build, backs up the previous setup, and applies the fixes. Manual Steam launch-option edits are not required.
 
 Choose the release asset named **Maneater-Crash-FPS-Fix.zip**. GitHub's automatic **Source code (zip/tar.gz)** downloads and repository clones are developer sources and require a manual build; the launcher does not compile or download a compiler for them.
 
@@ -16,7 +16,7 @@ Quit Maneater first. The launcher asks to close Steam briefly to save its per-ga
 
 To update an existing setup, use the previous launcher's **Restore previous setup** first. Then replace all launcher files, including `dist`, with the new ready-to-run ZIP, retain `.local` and its backups, and apply again. An already applied repair is not automatically upgraded. A new launcher folder without the ownership records will preserve an existing, untracked mod DLL pair.
 
-Version **0.4.0** retains the explicit experimental opt-in for an untested Steam build. The tested-build check remains the default. See [Compatibility](#compatibility) before using that option.
+**Allow an untested build (experimental)** is preselected. You can clear it to restrict Apply to the tested build. An untested build still requires acceptance of its warning before changes are made. See [Compatibility](#compatibility).
 
 ## What Apply all fixes does
 
@@ -40,7 +40,7 @@ Windows **10/11 x64**, Steam app **629820**. The compiled mod uses the Universal
 CC34E43BBD1F757E3883ADAF37D643C1A0FB2963967CA33AF7CB6CB8F54480C0
 ```
 
-The executable hash identifies the tested build. You can preview another Windows x64 build, but applying fixes to a different hash is refused by default. To try another Steam build, enable **Allow an untested build (experimental)** and accept its warning for that apply operation. Each apply requires acceptance; a previous acceptance is not a claim that the new build is supported.
+The executable hash identifies the tested build. The GUI preselects **Allow an untested build (experimental)**, but applying to a different hash still requires acceptance of its warning for that operation. Clear the option to allow only the tested build. A previous acceptance is not a claim that another build is supported. The command-line manager and repair backend continue to require an explicit untested-build flag.
 
 This option is limited to an installation identified as Maneater in the current Steam libraries. It does not implicitly support Epic, Game Pass, other storefronts, or an arbitrary executable copied elsewhere. The actual selected executable hash is recorded in the private repair journal.
 

@@ -152,6 +152,43 @@ try {
     Assert-Test ((Assert-SteamManeaterInstallation $context $gameRoot).Validated) 'legacy registered-library format supported'
     Assert-Test ((& $module { Normalize-SteamFixDirectory 'D:\' }) -ceq 'D:\') 'drive-root library path is not converted to drive-relative path'
 
+    # Discovery is read-only and independent of Steam account selection.
+    $shipping=Join-Path $gameRoot 'Maneater\Binaries\Win64\Maneater-Win64-Shipping.exe'
+    [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($shipping))|Out-Null
+    [IO.File]::WriteAllText($shipping,'never-executed discovery fixture')
+    $launcher=Join-Path $gameRoot 'Maneater.exe';[IO.File]::WriteAllText($launcher,'never-executed launcher fixture')
+    $libraryBefore=(Get-FileHash $libraryFile).Hash;$manifestBefore=(Get-FileHash $manifest).Hash
+    $found=Find-SteamManeaterExecutable -SteamDirectories @($steam,$steam)
+    Assert-Test ($found.Found -and $found.Executable -ceq $launcher) 'legacy extra-drive library is detected and root launcher preferred; duplicate roots deduplicated'
+    [IO.File]::WriteAllText($libraryFile,$libraryText,$encoding)
+    Assert-Test ((Find-SteamManeaterExecutable -SteamDirectories @($steam)).Executable -ceq $launcher) 'modern registered Steam library is detected'
+    Assert-Test ((Get-FileHash $manifest).Hash -ceq $manifestBefore) 'discovery does not modify installation metadata'
+    [IO.File]::Delete($launcher)
+    Assert-Test ((Find-SteamManeaterExecutable -SteamDirectories @($steam)).Executable -ceq $shipping) 'shipping executable is a fallback when root launcher is absent'
+    $custom=Join-Path $library 'steamapps\common\Custom Maneater Folder'
+    [IO.Directory]::Move($gameRoot,$custom)
+    [IO.File]::WriteAllText($manifest,'"AppState" { "appid" "629820" "installdir" "Custom Maneater Folder" }',$encoding)
+    $customExe=Join-Path $custom 'Maneater\Binaries\Win64\Maneater-Win64-Shipping.exe'
+    Assert-Test ((Find-SteamManeaterExecutable -SteamDirectories @($steam)).Executable -ceq $customExe) 'appmanifest custom installation directory is detected'
+    [IO.File]::WriteAllText($manifest,'"AppState" { "appid" "629820" "installdir" "..\outside" }',$encoding)
+    Assert-Test (-not (Find-SteamManeaterExecutable -SteamDirectories @($steam)).Found) 'manifest traversal is never searched'
+    [IO.Directory]::Move($custom,$gameRoot)
+    [IO.File]::WriteAllText($manifest,'"AppState" { "appid" "629820" "installdir" "Maneater" }',$encoding)
+    $defaultRoot=Join-Path $steam 'steamapps\common\Maneater'
+    $defaultShipping=Join-Path $defaultRoot 'Maneater\Binaries\Win64\Maneater-Win64-Shipping.exe'
+    [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($defaultShipping))|Out-Null
+    [IO.File]::WriteAllText($defaultShipping,'never-executed default fixture')
+    $multiple=Find-SteamManeaterExecutable -SteamDirectories @($steam)
+    Assert-Test (-not $multiple.Found -and $multiple.Reason -like 'Multiple*') 'ambiguous installed copies are left for manual selection'
+    [IO.File]::Delete($shipping)
+    $defaultLauncher=Join-Path $defaultRoot 'Maneater.exe';[IO.File]::WriteAllText($defaultLauncher,'never-executed root fixture')
+    Assert-Test ((Find-SteamManeaterExecutable -SteamDirectories @($steam)).Executable -ceq $defaultLauncher) 'conventional Steam common folder is detected without account settings'
+    [IO.File]::WriteAllText($libraryFile,'malformed metadata',$encoding)
+    Assert-Test ((Find-SteamManeaterExecutable -SteamDirectories @($steam)).Executable -ceq $defaultLauncher) 'malformed library list retains conventional-folder suggestion for normal preflight validation'
+    [IO.File]::Delete($defaultShipping)
+    $missing=Find-SteamManeaterExecutable -SteamDirectories @($steam,'relative-library')
+    Assert-Test (-not $missing.Found -and $missing.Reason -like '*Choose game*') 'missing or incomplete installation and relative roots leave manual picker available'
+
     $loginDirectory=Join-Path $steam 'config'; [IO.Directory]::CreateDirectory($loginDirectory) | Out-Null
     $loginPath=Join-Path $loginDirectory 'loginusers.vdf'
     $fakeId=([uint64]1 -shl 56) + ([uint64]1 -shl 52) + ([uint64]1 -shl 32) + [uint64]42
