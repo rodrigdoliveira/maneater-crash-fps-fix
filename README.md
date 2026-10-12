@@ -19,35 +19,24 @@ The launcher may ask to close Steam briefly to save its per-game settings. If Wi
 
 ## What Apply all fixes does
 
-The established v0.6.0 repair setup is retained:
+Applies the following fixes and optimizations with compatibility checks and backups:
 
 | Fix | Applied behavior |
 | --- | --- |
 | Native FPS correction | Redirects the guarded engine's 60 FPS request to 120 through its original setter. Other requests and graphics-quality settings are preserved. This does not guarantee 120 rendered frames per second. |
+| Human recovery animation | Streamlines one get-up animation lookup using the game's original animation selector and random-selection behavior. |
+| Navigation | Avoids unnecessary searches when connecting navigation data during area loading. Possible connections still use the game's original finder. |
+| Package loading | Removes unused temporary package-name string work while preserving the original loader's inputs and loading order. |
 | OpenSSL compatibility | Applies the existing OpenSSL compatibility flag through game-specific Steam launch options. |
-| CPU scheduling and worker budget | Uses detected hardware to choose the worker budget. Supported Intel hybrid CPUs also use performance-core affinity; eligible Ryzen SMT CPUs get an physical-core budget without an affinity mask. |
+| CPU scheduling and worker budget | Uses detected hardware to choose the worker budget. Supported Intel hybrid CPUs also use performance-core affinity; eligible Ryzen SMT CPUs get a physical-core budget without an affinity mask. |
 | Ansel SDK | Reversibly disables the recognized bundled NVIDIA Ansel SDK, removing its photo-mode support. Unknown or already absent/disabled copies are preserved. |
 | Steam overlay | Turns off the overlay for Maneater only. |
 
-v0.7.0 adds these native optimizations with compatibility guards:
-
-| Optimization | What it changes |
-| --- | --- |
-| Human get-up animation lookup | Replaces one native lookup for an uninjured human's chest-down get-up animation. It copies the corresponding animation list and uses the game's original selector, retaining null filtering, random draws and the four existing getter calls' order. |
-| Navigation connection searches | Builds a temporary boundary-edge index during eligible area-loading calls. It returns no match early only when the original plane/overlap tests cannot succeed; possible matches still run the original finder. Direction buckets make repeated lookups cheaper. |
-| Package-loading label | Removes construction and disposal of an unused `Package ` + name string. The same inner loader receives the same original inputs, flags and return contract. |
-
-Damage and collision events are not suppressed. Navigation and asset work are not moved to another frame. The stock executable and game archives are not edited on disk. The navigation and package-loading changes use guarded native entry hooks in process memory, in addition to the inherited FPS object hook and get-up function-pointer replacement.
+The setup preserves graphics-quality settings and saves. Native optimizations activate only when their compatibility checks pass. Damage and collision events retain their original handling, and the stock executable and game archives are not edited on disk.
 
 A matching **ManeaterAreaHelper.exe** starts hidden during game startup, verifies the target and attaches the native entries, then exits. It is an attachment helper, not a gameplay profiler. The DLL/helper pair is verified together and included in the ZIP.
 
-## What changed from v0.6.0
-
-v0.6.0 already included the 120 FPS correction, Intel and Ryzen CPU plans, OpenSSL flag, Ansel/overlay changes, game detection, backup/restore and the preselected untested-build option. Those are retained in v0.7.0.
-
-The three rows above are the additions. Navigation's earlier private V1 and the included V2 are stages of one optimization: V2 groups the same temporary index by direction and retains V1's conservative rejection conditions. There are not two separate navigation fixes.
-
-The failed recovery-event asset guard and later speculative queue, persistent-cache, get-up compaction and string-search experiments are not included. See [the v0.7.0 release notes](docs/release-notes-0.7.0.md) for the comparison and evidence limits.
+See [the release notes](docs/release-notes-0.7.0.md) for version history and validation details.
 
 ## Upgrade and restore
 
