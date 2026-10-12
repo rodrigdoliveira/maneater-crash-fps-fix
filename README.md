@@ -1,17 +1,17 @@
 # Maneater Crash & FPS Fix
 
-A free, open-source Windows launcher that applies the Maneater crash/FPS repair setup and native recovery, navigation and loading optimizations from one window. **v0.7.0** includes ready-built binaries and their matching full sources.
+A free, open-source Windows launcher that applies the Maneater crash/FPS repair setup and native recovery, navigation and loading optimizations from one window. **v0.8.0** includes ready-built binaries and their matching full sources.
 
-The v0.7.0 algorithms passed gameplay testing on the reference Steam build. The tester reported that they worked great, and startup logs confirmed recovery, navigation, loading and FPS attachment. See [the validation record](docs/gameplay-validation.md).
+The game optimizations passed gameplay testing on the reference Steam build. The tester reported that they worked great, and startup logs confirmed recovery, navigation, loading and FPS attachment. See [the validation record](docs/gameplay-validation.md).
 
 ## Download and run
 
 1. [Download **Maneater-Crash-FPS-Fix.zip**](https://github.com/rodrigdoliveira/maneater-crash-fps-fix/releases/latest/download/Maneater-Crash-FPS-Fix.zip) and extract it into a folder you will keep.
-2. Quit Maneater and double-click **Start.cmd**.
+2. Double-click **Start.cmd**. The updater checks GitHub, installs any newer launcher package, then opens the launcher. Quit Maneater before applying game fixes.
 3. Wait for automatic detection, then click **Apply all fixes**. If the game is not found or there are multiple installations, use **Choose game...** to select **Maneater.exe** or **Maneater-Win64-Shipping.exe**.
 4. Click **Play Maneater** to start it through Steam.
 
-The release ZIP includes the compiled mod DLL, its matching attachment helper, manifest, full sources and tests. Installing it requires no compiler or compiler download. A source-only checkout needs the developer build described below.
+The release ZIP includes the compiled mod DLL, its matching attachment helper, manifest, full sources and tests. Extract the ZIP once for the first installation. Future launcher updates are automatic; no compiler or compiler download is required. A source-only checkout needs the developer build described below.
 
 The launcher searches Steam's installation folders and registered libraries, including other drives and custom folders recorded in the game manifest. It detects your CPU and validates the game, packaged binaries and local Windows DXGI export contract before applying changes. Manual Steam launch-option edits are not required.
 
@@ -36,15 +36,15 @@ The setup preserves graphics-quality settings and saves. Native optimizations ac
 
 A matching **ManeaterAreaHelper.exe** starts hidden during game startup, verifies the target and attaches the native entries, then exits. It is an attachment helper, not a gameplay profiler. The DLL/helper pair is verified together and included in the ZIP.
 
-See [the release notes](docs/release-notes-0.7.0.md) for version history and validation details.
+See [the release notes](docs/release-notes-0.8.0.md) for version history and validation details.
 
 ## Upgrade and restore
 
-- **Update:** Extract the latest release into a **new folder**, run **Start.cmd**, and click **Apply all fixes**.
-- **Restore:** Quit Maneater and click **Restore previous setup** in the launcher that applied the fixes.
-- **Keep your backups:** Keep the old and new launcher folders, including `.local`.
+- **Update:** Run **Start.cmd**. The separate updater checks GitHub, downloads and verifies the latest package, then opens the launcher.
+- **Update game fixes:** If prompted, quit Maneater and click **Apply all fixes**. Your original restore backups are retained.
+- **Restore:** Click **Restore previous setup** in the launcher that applied the fixes.
 
-If you reuse a launcher folder, restore with its old launcher before replacing its files. Restore preserves changes made by other tools.
+Keep the launcher folder and `.local` backups. Interrupted updates roll back; changed or untracked files are preserved. If the update check cannot finish, you can open the installed version.
 
 ## Why the CPU fix matters
 

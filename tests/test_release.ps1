@@ -19,8 +19,8 @@ try{
     $sources=@((Get-Content -LiteralPath (Join-Path $root 'release-files.json') -Raw | ConvertFrom-Json).SourceFiles)
     foreach($relative in $sources){$target=Join-Path $fixture $relative;[IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($target))|Out-Null;[IO.File]::Copy((Join-Path $root $relative),$target,$false)}
     Fixture-Git -Arguments @('init','--quiet')|Out-Null
-    Fixture-Git -Arguments @('config','user.name','Release fixture')|Out-Null
-    Fixture-Git -Arguments @('config','user.email','fixture@example.invalid')|Out-Null
+    Fixture-Git -Arguments @('config','user.name','rodrigdoliveira')|Out-Null
+    Fixture-Git -Arguments @('config','user.email','32792889+rodrigdoliveira@users.noreply.github.com')|Out-Null
     Fixture-Git -Arguments @('config','core.autocrlf','false')|Out-Null
     Fixture-Git -Arguments @('config','core.safecrlf','false')|Out-Null
     Fixture-Git -Arguments @('add','--all')|Out-Null
@@ -43,11 +43,11 @@ try{
     $release=Package-Fixture
     Assert-Test ([IO.File]::Exists($release.ZipPath) -and $release.SHA256 -ceq (Hash $release.ZipPath)) 'ready ZIP returned with verified output hash'
     Assert-Test ($release.SourceCommit -ceq [string](Fixture-Git -Arguments @('rev-parse','HEAD')) -and $release.SourceTree -ceq [string](Fixture-Git -Arguments @('rev-parse','HEAD^{tree}'))) 'release reports pinned source commit/tree'
-    Assert-Test ($release.SourceFileCount -eq $sources.Count -and $release.NativeArtifactCount -eq 4 -and $release.NativeExports -eq 20) 'release has source plus exactly four native artifacts'
+    Assert-Test ($release.SourceFileCount -eq $sources.Count -and $release.NativeArtifactCount -eq 5 -and $release.NativeExports -eq 20) 'release has source plus native artifacts and updater inventory'
     $zip=[IO.Compression.ZipFile]::OpenRead($release.ZipPath)
     try{
         $names=@($zip.Entries|Where-Object {-not $_.FullName.EndsWith('/')}|ForEach-Object {$_.FullName})
-        $expected=@($sources|ForEach-Object {'Maneater-Crash-FPS-Fix/'+$_})+@('Maneater-Crash-FPS-Fix/dist/dxgi.dll','Maneater-Crash-FPS-Fix/dist/ManeaterAreaHelper.exe','Maneater-Crash-FPS-Fix/dist/build.json','Maneater-Crash-FPS-Fix/dist/dxgi_proxy.def')
+        $expected=@($sources|ForEach-Object {'Maneater-Crash-FPS-Fix/'+$_})+@('Maneater-Crash-FPS-Fix/dist/dxgi.dll','Maneater-Crash-FPS-Fix/dist/ManeaterAreaHelper.exe','Maneater-Crash-FPS-Fix/dist/build.json','Maneater-Crash-FPS-Fix/dist/dxgi_proxy.def','Maneater-Crash-FPS-Fix/dist/package-files.json')
         Assert-Test ($names.Count -eq $expected.Count -and @($names|Where-Object {$_ -cnotin $expected}).Count -eq 0) 'archive entry set is exact and excludes Windows DLL/tools/state/cache/debug fixtures'
         $reader=New-Object IO.StreamReader(($zip.GetEntry('Maneater-Crash-FPS-Fix/Start.cmd')).Open(),[Text.Encoding]::ASCII)
         try{$batch=$reader.ReadToEnd()}finally{$reader.Dispose()}

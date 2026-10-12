@@ -12,7 +12,8 @@ foreach ($name in $sourceAllowlist) {
     if ($name -match '(^/|\\|(^|/)\.\.(/|$)|:|(^|/)(\.git|\.local|dist|cache)(/|$))' -or $name -match '\.(dll|exe|pdb|etl|csv|sav|log)$') { throw 'Unsafe release source path.' }
 }
 $provenanceFiles=@($sourceAllowlist | Where-Object { $_ -match '^(src|vendor)/' })+@('scripts/PeExports.psm1','build.ps1','Manage-Mod.ps1')
-$artifacts=@('dxgi.dll','ManeaterAreaHelper.exe','build.json','dxgi_proxy.def')
+$prebuiltArtifacts=@('dxgi.dll','ManeaterAreaHelper.exe','build.json','dxgi_proxy.def')
+$artifacts=$prebuiltArtifacts+@('package-files.json')
 $dist=Join-Path $root 'dist'
 $tempPrefix=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')+'\'
 if([string]::IsNullOrWhiteSpace($OutputPath)){$OutputPath=Join-Path $dist 'Maneater-Crash-FPS-Fix.zip'}
@@ -75,7 +76,7 @@ try{
     $sources=@(Invoke-ReleaseGit -Arguments @('ls-tree','-r','--name-only','HEAD'))
     foreach($path in $sources){if($path -cnotin $sourceAllowlist){throw ('Tracked path is outside the release source allowlist: '+$path)}}
     foreach($path in $sourceAllowlist){if($path -cnotin $sources){throw ('Required release source is absent from HEAD: '+$path)}}
-    foreach($name in $artifacts){if(-not [IO.File]::Exists((Join-Path $dist $name))){throw ('Prebuilt artifact is missing: dist/'+$name+'. Build before packaging.')}}
+    foreach($name in $prebuiltArtifacts){if(-not [IO.File]::Exists((Join-Path $dist $name))){throw ('Prebuilt artifact is missing: dist/'+$name+'. Build before packaging.')}}
     [IO.Directory]::CreateDirectory($dist)|Out-Null
     # A short OS temporary path avoids MAX_PATH failures when the checkout is
     # already deeply nested; the isolated stage is never part of the ZIP.
@@ -88,10 +89,10 @@ try{
     [IO.Compression.ZipFile]::ExtractToDirectory($archive,$extract)
     $payload=Join-Path $extract 'Maneater-Crash-FPS-Fix'
     $payloadDist=Join-Path $payload 'dist';[IO.Directory]::CreateDirectory($payloadDist)|Out-Null
-    foreach($name in $artifacts){[IO.File]::WriteAllBytes((Join-Path $payloadDist $name),[IO.File]::ReadAllBytes((Join-Path $dist $name)))}
+    foreach($name in $prebuiltArtifacts){[IO.File]::WriteAllBytes((Join-Path $payloadDist $name),[IO.File]::ReadAllBytes((Join-Path $dist $name)))}
     $manifest=Get-Content -LiteralPath (Join-Path $payloadDist 'build.json') -Raw|ConvertFrom-Json
-    if($manifest.SchemaVersion -ne 1 -or $manifest.Version -cne '0.7.0' -or $manifest.TargetFPS -ne 120 -or
-        $manifest.GameSHA256 -cne 'CC34E43BBD1F757E3883ADAF37D643C1A0FB2963967CA33AF7CB6CB8F54480C0'){throw 'Prebuilt manifest does not describe the v0.7.0 build.'}
+    if($manifest.SchemaVersion -ne 1 -or $manifest.Version -cne '0.8.0' -or $manifest.TargetFPS -ne 120 -or
+        $manifest.GameSHA256 -cne 'CC34E43BBD1F757E3883ADAF37D643C1A0FB2963967CA33AF7CB6CB8F54480C0'){throw 'Prebuilt manifest does not describe the v0.8.0 build.'}
     if ($manifest.HelperSHA256 -cnotmatch '^[0-9A-F]{64}$' -or (Release-Hash (Join-Path $payloadDist 'ManeaterAreaHelper.exe')) -cne $manifest.HelperSHA256) { throw 'Companion helper hash differs from manifest.' }
     $helperHeader=[IO.File]::ReadAllText((Join-Path $payload 'src/nav_helper_hash.h'))
     $helperBytes=([regex]::Matches($helperHeader,'0x([0-9a-fA-F]{2})') | ForEach-Object { $_.Groups[1].Value }) -join ''
@@ -126,6 +127,10 @@ try{
     foreach($value in $startBytes){if($value -gt 127){throw 'Start.cmd must be an ASCII batch entrypoint.'}}
     $startText=[Text.Encoding]::ASCII.GetString($startBytes).Replace("`r`n","`n").Replace("`r","`n").Replace("`n","`r`n")
     [IO.File]::WriteAllBytes($start,[Text.Encoding]::ASCII.GetBytes($startText))
+    $inventory=[ordered]@{}
+    foreach($relative in @($sources)+@($prebuiltArtifacts|ForEach-Object {'dist/'+$_})){$inventory[$relative]=Release-Hash (Join-Path $payload $relative)}
+    $ledger=[ordered]@{SchemaVersion=1;BootstrapProtocol=1;Repository='rodrigdoliveira/maneater-crash-fps-fix';Version=$manifest.Version;Files=$inventory}
+    [IO.File]::WriteAllText((Join-Path $payloadDist 'package-files.json'),($ledger|ConvertTo-Json -Depth 5)+"`n",[Text.UTF8Encoding]::new($false))
     Assert-ReleaseClean
     if([string](Invoke-ReleaseGit -Arguments @('rev-parse','HEAD')) -cne $head){throw 'Git HEAD changed during packaging.'}
     $readyZip=Join-Path $stage 'ready.zip'
@@ -154,7 +159,7 @@ try{
     $zipHash=Release-Hash $readyZip
     if((Release-Hash $outputTemp) -cne $zipHash){throw 'Release ZIP copy verification failed.'}
     if([IO.File]::Exists($output)){[IO.File]::Replace($outputTemp,$output,[NullString]::Value)}else{[IO.File]::Move($outputTemp,$output)}
-    [pscustomobject]@{Version='0.7.0';ZipPath=$output;SHA256=$zipHash;SourceCommit=$head;SourceTree=$tree;SourceFileCount=$sources.Count;NativeArtifactCount=$artifacts.Count;NativeExports=$proxy.Exports.Count;NativeImports=$imports;HelperImports=$helperImports}
+    [pscustomobject]@{Version='0.8.0';ZipPath=$output;SHA256=$zipHash;SourceCommit=$head;SourceTree=$tree;SourceFileCount=$sources.Count;NativeArtifactCount=$artifacts.Count;NativeExports=$proxy.Exports.Count;NativeImports=$imports;HelperImports=$helperImports}
 }finally{
     if($null -ne $outputTemp -and [IO.File]::Exists($outputTemp)){[IO.File]::Delete($outputTemp)}
     if($null -ne $stage -and [IO.Directory]::Exists($stage)){

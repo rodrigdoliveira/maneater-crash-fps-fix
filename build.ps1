@@ -58,7 +58,7 @@ try {
         $sourceHashes[$relative] = (Get-FileHash -LiteralPath (Join-Path $root $relative) -Algorithm SHA256).Hash
     }
     $manifest = [ordered]@{
-        SchemaVersion = 1; Version = '0.7.0'; TargetFPS = 120
+        SchemaVersion = 1; Version = '0.8.0'; TargetFPS = 120
         GameSHA256 = 'CC34E43BBD1F757E3883ADAF37D643C1A0FB2963967CA33AF7CB6CB8F54480C0'
         ModSHA256 = (Get-FileHash -LiteralPath $output -Algorithm SHA256).Hash
         HelperSHA256 = $helperHash

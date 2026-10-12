@@ -9,7 +9,11 @@ $progressPath = $RequestPath + '.progress.json'
 $resultPath = $RequestPath + '.result.json'
 $progress = { param($Message) Write-RepairJson $progressPath ([pscustomobject]@{ Message=[string]$Message; UTC=[DateTime]::UtcNow.ToString('o') }) }.GetNewClosure()
 $lock = $null
+$activeLock=$null
 try {
+    $activePath=Join-Path $root '.local/launcher-active.lock'
+    if(-not[IO.File]::Exists($activePath)){$creation=[IO.File]::Open($activePath,'OpenOrCreate','ReadWrite','ReadWrite');$creation.Dispose()}
+    $activeLock=[IO.File]::Open($activePath,'Open','Read','Read')
     try { $lock = [IO.File]::Open((Join-Path $root '.local\repair.lock'), 'OpenOrCreate', 'ReadWrite', 'None') }
     catch { throw 'Another repair operation is running. Wait for it to finish, then retry.' }
     switch ($request.Action) {
@@ -35,4 +39,4 @@ try {
 } catch {
     Write-RepairJson $resultPath ([pscustomobject]@{ Success=$false; Result=$null; Message=$_.Exception.Message })
     exit 1
-} finally { if ($null -ne $lock) { $lock.Dispose() } }
+} finally { if ($null -ne $lock) { $lock.Dispose() };if($activeLock){$activeLock.Dispose()} }

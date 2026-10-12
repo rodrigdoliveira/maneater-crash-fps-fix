@@ -42,7 +42,7 @@ function New-Scenario([string]$Name){
     $mod=Join-Path $repo 'dist\dxgi.dll';$system=Join-Path $repo 'dist\fixture-system.dll'
     [IO.File]::WriteAllText($mod,'fixture new proxy');[IO.File]::WriteAllText($system,'fixture system copy')
     $helper=Join-Path $repo 'dist\ManeaterAreaHelper.exe';[IO.File]::WriteAllText($helper,'inert fixture helper; never executed')
-    $manifest=[pscustomobject]@{Version='0.7.0';GameSHA256=(Hash $exe);TargetFPS=120;ModSHA256=(Hash $mod);HelperSHA256=(Hash $helper)}
+    $manifest=[pscustomobject]@{Version='0.8.0';GameSHA256=(Hash $exe);TargetFPS=120;ModSHA256=(Hash $mod);HelperSHA256=(Hash $helper)}
     [IO.File]::WriteAllText((Join-Path $repo 'dist\build.json'),($manifest|ConvertTo-Json))
     $installer=@'
 param([string]$Action,[string]$GameDirectory,[switch]$AllowUntestedBuild,[string]$ExpectedGameSHA256)
@@ -116,7 +116,7 @@ function Use-RealBundleReadiness($Case){
     foreach($relative in @('src/maneater_fps_hook.c','scripts/PeExports.psm1','build.ps1','Manage-Mod.ps1')){$hashes[$relative]=Hash (Join-Path $Case.Root $relative)}
     $exports=@([pscustomobject]@{Name='Alpha';Ordinal=1},[pscustomobject]@{Name='Beta';Ordinal=2})
     $contract=& $Case.Module {param($Exports) Get-ExportContractHash -Exports $Exports} $exports
-    $manifest=[pscustomobject]@{SchemaVersion=1;Version='0.7.0';GameSHA256=(Hash $Case.Exe);TargetFPS=120;ModSHA256=(Hash $Case.Mod);HelperSHA256=(Hash $Case.Helper);DefinitionSHA256=(Hash $definition);SystemExportsSHA256=$contract;ModExportsSHA256=$contract;SystemExports=$exports;BuildSystemDLLSHA256=(Hash $Case.System);SourceHashes=$hashes}
+    $manifest=[pscustomobject]@{SchemaVersion=1;Version='0.8.0';GameSHA256=(Hash $Case.Exe);TargetFPS=120;ModSHA256=(Hash $Case.Mod);HelperSHA256=(Hash $Case.Helper);DefinitionSHA256=(Hash $definition);SystemExportsSHA256=$contract;ModExportsSHA256=$contract;SystemExports=$exports;BuildSystemDLLSHA256=(Hash $Case.System);SourceHashes=$hashes}
     [IO.File]::WriteAllText((Join-Path $Case.Root 'dist\build.json'),($manifest|ConvertTo-Json -Depth 6))
     $tokens=$null;$errors=$null
     $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $sourceRoot 'scripts\Repair.psm1'),[ref]$tokens,[ref]$errors)

@@ -4,6 +4,8 @@ $script:Root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $script:SupportedGameHash = 'CC34E43BBD1F757E3883ADAF37D643C1A0FB2963967CA33AF7CB6CB8F54480C0'
 $script:LegacyModHash = '5C9EF79C6F5EBC99DB15E62E883F5635FF4133442BFDE6891D98A38A1B9129E6'
 $script:PublicV02ModHash = '3D6BE39D601175AD5DC435A68EFB6036C107C0646C94A99300567F82387B660E'
+$script:PublicV07ModHash = 'BF59359AC0DA0823B563F501E18BBF407E6359C07B1E1524F8886D894112103D'
+$script:PublicV07HelperHash = '898C59D575AFF5DD9F6CDB0F46A2DEB5F1700DF80A5DDFE2A86AE1C71B1DCB7A'
 $script:PrivateLoadingModHash = '03FAD0061DD00A332E2C93CA10FE3ECF2379ADAFBEBE7A59A2FFDE384A11E744'
 $script:PrivateLoadingHelperHash = 'B1399B39E4CA9E7E1C48F761AFA42FB0649A239F7EC55F6706655FC76FDC21B4'
 $script:PreviewV07ModHash = '85B190F0AD305F9FD0D9C9A676D61B4179FB736F32D6ED3C4BC9E468F80208BF'
@@ -71,10 +73,16 @@ function Test-RepairAnselSkipped {
     param($Plan)
     return $null -ne $Plan.PSObject.Properties['AnselDisposition'] -and $Plan.AnselDisposition -eq 'SkippedUnknownSDK'
 }
+function Test-BundleUpdateAvailable($Journal){
+    if(-not(Get-RepairBuildReady)){return $false}
+    $build=Get-Content -LiteralPath (Join-Path $script:Root 'dist/build.json') -Raw|ConvertFrom-Json
+    return $null-eq$Journal.PSObject.Properties['PackageVersion']-or$Journal.PackageVersion-cne$build.Version-or
+        $Journal.Plan.Native.InstalledHash-cne$build.ModSHA256-or$Journal.Plan.Native.InstalledHelperHash-cne$build.HelperSHA256
+}
 function Get-RepairBuildReady {
     try {
         $manifest = Get-Content -LiteralPath (Join-Path $script:Root 'dist\build.json') -Raw | ConvertFrom-Json
-        if ($manifest.SchemaVersion -ne 1 -or $manifest.Version -cne '0.7.0' -or $manifest.GameSHA256 -cne $script:SupportedGameHash -or $manifest.TargetFPS -ne 120 -or $manifest.HelperSHA256 -cnotmatch '^[0-9A-F]{64}$') { return $false }
+        if ($manifest.SchemaVersion -ne 1 -or $manifest.Version -cne '0.8.0' -or $manifest.GameSHA256 -cne $script:SupportedGameHash -or $manifest.TargetFPS -ne 120 -or $manifest.HelperSHA256 -cnotmatch '^[0-9A-F]{64}$') { return $false }
         $sources = [Collections.Generic.List[string]]::new()
         foreach ($folder in @('src','vendor')) {
             $directory = Join-Path $script:Root $folder
@@ -133,6 +141,7 @@ function Get-NativeRepairPlan {
             } else { throw 'Native installation record does not match the files. Restore or repair that installation first.' }
         } else {
             $known = (-not $helperPresent) -and ($oldModHash -ceq $script:LegacyModHash -or $oldModHash -ceq $script:PublicV02ModHash)
+            $known = $known -or ($oldModHash -ceq $script:PublicV07ModHash -and $oldHelperHash -ceq $script:PublicV07HelperHash)
             $known = $known -or ((Test-RepairGameTested $Game) -and $oldModHash -ceq $script:PrivateLoadingModHash -and $oldHelperHash -ceq $script:PrivateLoadingHelperHash)
             $known = $known -or ((Test-RepairGameTested $Game) -and $oldModHash -ceq $script:PreviewV07ModHash -and $oldHelperHash -ceq $script:PreviewV07HelperHash)
             if (Get-RepairBuildReady) {
@@ -193,7 +202,7 @@ function Test-ManeaterRepairState {
             if ([IO.File]::Exists($Journal.Plan.Ansel.OriginalPath)) { throw 'The Ansel SDK was enabled again.' }
             if ($Journal.Plan.Ansel.Action -eq 'Disable' -and (Get-RepairHash $Journal.Plan.Ansel.DisabledPath) -cne $Journal.Plan.Ansel.ExpectedHash) { throw 'The saved Ansel SDK changed or is missing.' }
         }
-        return [pscustomobject]@{Valid=$true;Reason='All applicable fixes are present.'}
+        return [pscustomobject]@{Valid=$true;Reason='All applicable fixes are present.';BundleUpdateAvailable=(Test-BundleUpdateAvailable $Journal)}
     } catch { return [pscustomobject]@{Valid=$false;Reason=$_.Exception.Message} }
 }
 function Assert-RepairWritable {
@@ -304,6 +313,7 @@ function Restore-ManeaterRepair {
     $statePath = Get-RepairStatePath
     if (-not [IO.File]::Exists($statePath)) { throw 'There is no repair record in this launcher folder.' }
     $journal = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    if($journal.Status-in@('upgrading','upgrade-recovery-required')){$journal=Restore-NativeBundleUpgrade $journal}
     if ($journal.SchemaVersion -ne 1) { throw 'Unsupported restore record.' }
     if ($journal.Status -eq 'restored') { & $Progress 'Already restored.'; return $journal }
     $steamRecord = Join-Path $journal.BackupDirectory 'steam-fix.json'
@@ -326,6 +336,95 @@ function Restore-ManeaterRepair {
     & $Progress $(if($warnings.Count){'Restored our changes; kept settings changed afterward.'}else{'Restored the settings and files saved before Apply fixes.'})
     return $journal
 }
+function Restore-NativeBundleUpgrade($Journal){
+    $upgrade=$Journal.NativeUpgrade;$prior=$upgrade.PriorJournal
+    $bin=[IO.Path]::GetFullPath($prior.Plan.Game.Bin).TrimEnd('\')
+    $directory=[IO.Path]::GetFullPath($upgrade.Directory)
+    $prefix=[IO.Path]::GetFullPath((Join-Path $script:Root '.local/native-upgrades')).TrimEnd('\')+'\'
+    if(-not$directory.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)-or[IO.Path]::GetFileName($directory)-cnotmatch'^[0-9a-f]{32}$'-or$bin-notmatch'\\Maneater\\Binaries\\Win64$'-or@($upgrade.Files).Count-ne3){throw 'Invalid native upgrade recovery record.'}
+    $names=@('dxgi.dll','dxgi_codex_system.dll','ManeaterAreaHelper.exe')
+    foreach($entry in $upgrade.Files){
+        if($entry.Name-cnotin$names-or$entry.OldHash-cnotmatch'^[0-9A-F]{64}$'-or$entry.NewHash-cnotmatch'^[0-9A-F]{64}$'){throw 'Invalid native upgrade entry.'}
+        $backup=Join-Path $directory $entry.Name
+        if((Get-RepairHash $backup)-cne$entry.OldHash){throw 'Native upgrade backup changed.'}
+        $target=Join-Path $bin $entry.Name
+        if([IO.File]::Exists($target)){$hash=Get-RepairHash $target;if($hash-cne$entry.OldHash-and$hash-cne$entry.NewHash){throw 'Foreign native file preserved during upgrade recovery.'}}
+    }
+    if(@($upgrade.Files.Name|Select-Object -Unique).Count-ne3){throw 'Duplicate native upgrade entry.'}
+    $statePath=Join-Path $script:Root '.local/installation.json'
+    if([IO.File]::Exists($statePath)){
+        $stateHash=Get-RepairHash $statePath
+        if($stateHash-cne$upgrade.OldStateHash){
+            $state=Get-Content $statePath -Raw|ConvertFrom-Json
+            if($state.SchemaVersion-ne3-or$state.Status-cne'installed'-or$state.GameDirectory-ine$bin-or
+               $state.ModSHA256-cne$upgrade.Files[0].NewHash-or$state.SystemSHA256-cne$upgrade.Files[1].NewHash-or
+               $state.HelperSHA256-cne$upgrade.Files[2].NewHash-or$state.GameSHA256-cne$prior.Plan.Game.GameSHA256){throw 'Changed native ownership was preserved.'}
+        }
+    }
+    foreach($entry in $upgrade.Files){
+        $target=Join-Path $bin $entry.Name
+        if([IO.File]::Exists($target)-and(Get-RepairHash $target)-ceq$entry.OldHash){continue}
+        $stage=Join-Path $bin ('upgrade-restore-'+[Guid]::NewGuid().ToString('N')+'.tmp')
+        try{[IO.File]::Copy((Join-Path $directory $entry.Name),$stage,$false);if((Get-RepairHash $stage)-cne$entry.OldHash){throw 'Staged upgrade restore changed.'}
+            if([IO.File]::Exists($target)){if((Get-RepairHash $target)-cne$entry.NewHash){throw 'Upgrade restore target changed.'};[IO.File]::Replace($stage,$target,[NullString]::Value)}else{[IO.File]::Move($stage,$target)}
+        }finally{if([IO.File]::Exists($stage)){[IO.File]::Delete($stage)}}
+    }
+    if($null-ne$upgrade.OldStateHash){
+        $backup=Join-Path $directory 'installation.json'
+        if((Get-RepairHash $backup)-cne$upgrade.OldStateHash){throw 'Previous native ownership backup changed.'}
+        Write-RepairJson $statePath (Get-Content $backup -Raw|ConvertFrom-Json)
+    }elseif([IO.File]::Exists($statePath)){[IO.File]::Delete($statePath)}
+    Write-RepairJson (Get-RepairStatePath) $prior
+    return $prior
+}
+function Update-AppliedNativeBundle($Prior,[scriptblock]$Progress={}){
+    if(-not(Get-RepairBuildReady)){throw 'Updated mod package is invalid; existing fixes were preserved.'}
+    $build=Get-Content -LiteralPath (Join-Path $script:Root 'dist/build.json') -Raw|ConvertFrom-Json
+    if($Prior.Plan.Native.InstalledHash-ceq$build.ModSHA256-and$Prior.Plan.Native.InstalledHelperHash-ceq$build.HelperSHA256){
+        $Prior|Add-Member -NotePropertyName PackageVersion -NotePropertyValue $build.Version -Force;Write-RepairJson (Get-RepairStatePath) $Prior;return $Prior
+    }
+    $bin=$Prior.Plan.Game.Bin;$directory=Join-Path $script:Root ('.local/native-upgrades/'+[Guid]::NewGuid().ToString('N'))
+    [IO.Directory]::CreateDirectory($directory)|Out-Null
+    $files=@(
+        [pscustomobject]@{Name='dxgi.dll';OldHash=$Prior.Plan.Native.InstalledHash;NewHash=$build.ModSHA256},
+        [pscustomobject]@{Name='dxgi_codex_system.dll';OldHash=$Prior.Plan.Native.InstalledSystemHash;NewHash=$Prior.Plan.Native.InstalledSystemHash},
+        [pscustomobject]@{Name='ManeaterAreaHelper.exe';OldHash=$Prior.Plan.Native.InstalledHelperHash;NewHash=$build.HelperSHA256})
+    foreach($entry in $files){$target=Join-Path $bin $entry.Name;if((Get-RepairHash $target)-cne$entry.OldHash){throw 'Installed native files changed; no upgrade performed.'};[IO.File]::Copy($target,(Join-Path $directory $entry.Name),$false);if((Get-RepairHash (Join-Path $directory $entry.Name))-cne$entry.OldHash){throw 'Native upgrade backup verification failed.'}}
+    $statePath=Join-Path $script:Root '.local/installation.json';$oldStateHash=$null
+    if([IO.File]::Exists($statePath)){$oldStateHash=Get-RepairHash $statePath;[IO.File]::Copy($statePath,(Join-Path $directory 'installation.json'),$false);if((Get-RepairHash (Join-Path $directory 'installation.json'))-cne$oldStateHash){throw 'Native ownership backup changed.'}}
+    $journal=$Prior|ConvertTo-Json -Depth 30|ConvertFrom-Json
+    $journal.Status='upgrading'
+    $journal|Add-Member -NotePropertyName NativeUpgrade -NotePropertyValue ([pscustomobject]@{Directory=$directory;Files=$files;OldStateHash=$oldStateHash;PriorJournal=$Prior}) -Force
+    Write-RepairJson (Get-RepairStatePath) $journal
+    try{
+        & $Progress 'Updating installed native fixes...'
+        foreach($entry in $files){if((Get-RepairHash (Join-Path $bin $entry.Name))-cne$entry.OldHash){throw 'Native upgrade destination changed.'}}
+        foreach($entry in $files){[IO.File]::Delete((Join-Path $bin $entry.Name))}
+        # BUNDLE_UPGRADE_BEFORE_INSTALL
+        & (Join-Path $script:Root 'Manage-Mod.ps1') -Action Install -GameDirectory $bin -AllowUntestedBuild:([bool]$Prior.UntestedBuildOptIn) -ExpectedGameSHA256 $Prior.Plan.Game.GameSHA256|Out-Null
+        if($journal.Plan.Native.Action-ceq'None'){
+            $journal.Plan.Native.Action='ReplaceRecognized'
+            $journal.Plan.Native.OriginalModHash=$files[0].OldHash;$journal.Plan.Native.OriginalSystemHash=$files[1].OldHash;$journal.Plan.Native.OriginalHelperHash=$files[2].OldHash
+            foreach($pair in @(@{Source='dxgi.dll';Target=$journal.Plan.Native.BackupMod},@{Source='dxgi_codex_system.dll';Target=$journal.Plan.Native.BackupSystem},@{Source='ManeaterAreaHelper.exe';Target=$journal.Plan.Native.BackupHelper})){
+                $source=Join-Path $directory $pair.Source
+                if([IO.File]::Exists($pair.Target)){if((Get-RepairHash $pair.Target)-cne(Get-RepairHash $source)){throw 'Original native backup was changed.'}}
+                else{[IO.File]::Copy($source,$pair.Target,$false)}
+            }
+            $journal.Plan.Native.OriginalNativeRecord=$(if($null-ne$oldStateHash){Get-Content (Join-Path $directory 'installation.json') -Raw|ConvertFrom-Json}else{$null})
+        }
+        $journal.Plan.Native.InstalledHash=$build.ModSHA256;$journal.Plan.Native.InstalledHelperHash=$build.HelperSHA256
+        $journal|Add-Member -NotePropertyName PackageVersion -NotePropertyValue $build.Version -Force
+        $journal.Status='applied'
+        if(-not(Test-ManeaterRepairState $journal).Valid){throw 'Updated native files failed verification.'}
+        $journal.PSObject.Properties.Remove('NativeUpgrade');Write-RepairJson (Get-RepairStatePath) $journal
+        return $journal
+    }catch{
+        $failure=$_.Exception.Message
+        $journal=Get-Content (Get-RepairStatePath) -Raw|ConvertFrom-Json
+        try{$null=Restore-NativeBundleUpgrade $journal}catch{$journal.Status='upgrade-recovery-required';Write-RepairJson (Get-RepairStatePath) $journal;throw ($failure+' Recovery: '+$_.Exception.Message)}
+        throw ($failure+' Previous working fixes restored.')
+    }
+}
 function Invoke-ManeaterRepair {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$GameExecutable, $SteamContext, [switch]$AllowUntestedBuild, [ValidatePattern('^[0-9A-Fa-f]{64}$')][string]$ExpectedGameSHA256, [scriptblock]$Progress = {})
@@ -339,7 +438,11 @@ function Invoke-ManeaterRepair {
             if ($prior.Plan.Game.Bin -ine $selected.Bin) { throw 'Restore the previous game installation before selecting another one.' }
             $current=Test-ManeaterRepairState -Journal $prior
             if (-not $current.Valid) { throw ('The setup changed: ' + $current.Reason + ' Use Restore, then apply again.') }
-            & $Progress 'Fixes are already applied. Use Restore before changing the installation.'; return $prior
+            if(Test-BundleUpdateAvailable $prior){
+                if(-not$selected.TestedBuild-and-not$AllowUntestedBuild){throw 'Accept the untested-build warning before updating this game setup.'}
+                return Update-AppliedNativeBundle $prior $Progress
+            }
+            & $Progress 'Fixes are already applied.'; return $prior
         }
         if ($prior.Status -ne 'restored') { throw 'An interrupted repair needs recovery. Click Restore, then apply again.' }
     }
@@ -364,7 +467,7 @@ function Invoke-ManeaterRepair {
     $plan.Native.BackupSystem = Join-Path $backup 'previous-system-dxgi.dll'
     $plan.Native.BackupHelper = Join-Path $backup 'previous-ManeaterAreaHelper.exe'
     $warnings=@();if(-not $plan.Game.TestedBuild){$warnings+='Untested game build: native FPS activation depends on runtime compatibility checks.'};if(Test-RepairAnselSkipped $plan){$warnings+='Unrecognized Ansel SDK preserved; Ansel change skipped.'}
-    $journal = [pscustomobject]@{ SchemaVersion=1; Status='applying'; Plan=$plan; UntestedBuildOptIn=(-not $plan.Game.TestedBuild -and [bool]$AllowUntestedBuild); BackupDirectory=$backup; SteamRecord=$null; Errors=@(); Warnings=$warnings; StartedUTC=[DateTime]::UtcNow.ToString('o') }
+    $journal = [pscustomobject]@{ SchemaVersion=1; PackageVersion=$build.Version; Status='applying'; Plan=$plan; UntestedBuildOptIn=(-not $plan.Game.TestedBuild -and [bool]$AllowUntestedBuild); BackupDirectory=$backup; SteamRecord=$null; Errors=@(); Warnings=$warnings; StartedUTC=[DateTime]::UtcNow.ToString('o') }
     Write-RepairJson $statePath $journal
     try {
         & $Progress 'Installing the combined native fixes...'
@@ -398,7 +501,7 @@ function Invoke-ManeaterRepair {
         $verification=Test-ManeaterRepairState -Journal $journal
         if(-not $verification.Valid){throw ('Final verification failed: '+$verification.Reason)}
         Write-RepairJson $statePath $journal
-        & $Progress $(if($plan.Game.TestedBuild){'Fixes installed. Click Play to start Maneater.'}else{'Experimental setup installed. FPS compatibility is checked when Maneater starts.'})
+        & $Progress $(if($plan.Game.TestedBuild){'Fixes installed. Click Play to start Maneater.'}else{'Setup installed for this untested build. FPS compatibility is checked when Maneater starts.'})
         return $journal
     } catch {
         $failure = $_.Exception.Message

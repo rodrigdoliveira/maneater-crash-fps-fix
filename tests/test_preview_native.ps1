@@ -39,6 +39,16 @@ try{
     Assert-OldTuple $case $old 'restore returns exact previous private DLL, helper and system'
     Assert-Test ((Hash $owner) -ceq $ownerHash -and (Hash $oldBackup) -ceq $oldBackupHash -and -not [IO.File]::Exists((Join-Path $case.Root '.local\installation.json'))) 'old private ownership and backups untouched'
 
+    $case=New-Scenario 'stable-v07-upgrade';$old=New-KnownPrivate $case
+    & $case.Module {param($DllHash,$HelperHash)
+        $script:PrivateLoadingModHash='0'*64;$script:PrivateLoadingHelperHash='0'*64
+        $script:PublicV07ModHash=$DllHash;$script:PublicV07HelperHash=$HelperHash
+    } $old.DllHash $old.HelperHash
+    $journal=Invoke-Case $case
+    Assert-Test ($journal.Plan.Native.Action-ceq'ReplaceRecognized') 'public v0.7 tuple upgrades from a new launcher folder'
+    Restore-Case $case|Out-Null
+    Assert-OldTuple $case $old 'public v0.7 tuple is restored exactly'
+
     $case=New-Scenario 'tested-preview-upgrade';$old=New-KnownPrivate $case
     & $case.Module {param($DllHash,$HelperHash)
         $script:PrivateLoadingModHash='0'*64;$script:PrivateLoadingHelperHash='0'*64

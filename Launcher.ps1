@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$GameExecutable, [string]$SteamContextPath, [switch]$AutoApply, [switch]$AllowUntestedBuild, [switch]$DisallowUntestedBuild, [switch]$RenderPreview)
+param([string]$GameExecutable, [string]$SteamContextPath, [switch]$AutoApply, [switch]$AllowUntestedBuild, [switch]$DisallowUntestedBuild, [switch]$RenderPreview, [switch]$FromUpdater)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if (-not [Environment]::Is64BitProcess -or [Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Use Start.cmd on 64-bit Windows.' }
@@ -10,6 +10,19 @@ $root = [IO.Path]::GetFullPath($PSScriptRoot)
 $local = Join-Path $root '.local'
 try { [IO.Directory]::CreateDirectory($local) | Out-Null }
 catch { [Windows.Forms.MessageBox]::Show('Extract this launcher into a writable folder, such as Downloads, then run Start.cmd again.','Launcher folder is not writable','OK','Error')|Out-Null; exit 1 }
+$script:launcherLock=$null
+$script:activeLock=$null;$script:elevatedChild=$null
+if(-not$RenderPreview){
+    if(-not$FromUpdater){
+        try{$script:launcherLock=[IO.File]::Open((Join-Path $local 'update.lock'),'OpenOrCreate','ReadWrite','None')}
+        catch{[Windows.Forms.MessageBox]::Show('Another launcher or updater is running. Close it first.','Launcher is open','OK','Information')|Out-Null;exit 1}
+    }
+    $activePath=Join-Path $local 'launcher-active.lock'
+    if(-not[IO.File]::Exists($activePath)){$creation=[IO.File]::Open($activePath,'OpenOrCreate','ReadWrite','ReadWrite');$creation.Dispose()}
+    $script:activeLock=[IO.File]::Open($activePath,'Open','Read','Read')
+    $instance=[ordered]@{Root=$root.TrimEnd('\');Pid=$PID;StartTicks=(Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks}
+    [IO.File]::WriteAllText((Join-Path $local 'launcher-instance.json'),($instance|ConvertTo-Json),[Text.UTF8Encoding]::new($false))
+}
 $script:worker = $null; $script:requestPath = $null; $script:plan = $null; $script:action = ''; $script:lastMessage = ''; $script:steamExitPending=$false
 $script:initialSteamContext=$null
 if(-not [string]::IsNullOrWhiteSpace($SteamContextPath)){
@@ -18,7 +31,7 @@ if(-not [string]::IsNullOrWhiteSpace($SteamContextPath)){
     $script:initialSteamContext=Get-Content -LiteralPath $contextFile -Raw|ConvertFrom-Json
 }
 $form = New-Object Windows.Forms.Form
-$form.Text = 'Maneater Crash & FPS Fix - 0.7.0'
+$form.Text = 'Maneater Crash & FPS Fix - 0.8.0'
 $form.StartPosition = 'CenterScreen'
 $form.ClientSize = New-Object Drawing.Size(860,740)
 $form.MinimumSize = New-Object Drawing.Size(820,780)
@@ -138,6 +151,7 @@ $restore.Add_Click({ try { if(Request-SteamExit){Start-RepairWorker 'Restore'} }
 $play.Add_Click({ try { Start-Process 'steam://rungameid/629820' | Out-Null; $status.Text='Starting Maneater through Steam...' } catch { $status.Text=$_.Exception.Message } })
 $timer=New-Object Windows.Forms.Timer; $timer.Interval=250
 $timer.Add_Tick({
+    if($null-ne$script:elevatedChild){if($script:elevatedChild.HasExited){$form.Close()};return}
     if ($null -eq $script:worker) { return }
     try {
         $progressPath=$script:requestPath+'.progress.json'
@@ -158,9 +172,9 @@ $timer.Add_Tick({
                     $powerShell=Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
                     $contextFile=Join-Path $local ('steam-context-'+[Guid]::NewGuid().ToString('N')+'.json')
                     [IO.File]::WriteAllText($contextFile,($script:plan.SteamContext|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
-                    $arguments='-NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+(Join-Path $root 'Launcher.ps1')+'" -GameExecutable "'+$pathBox.Text+'" -SteamContextPath "'+$contextFile+'" -AutoApply'
+                    $arguments='-NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+(Join-Path $root 'Launcher.ps1')+'" -GameExecutable "'+$pathBox.Text+'" -SteamContextPath "'+$contextFile+'" -AutoApply -FromUpdater'
                     if($untested.Checked){$arguments+=' -AllowUntestedBuild'}else{$arguments+=' -DisallowUntestedBuild'}
-                    Start-Process -FilePath $powerShell -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden | Out-Null; $form.Close()
+                    $script:elevatedChild=Start-Process -FilePath $powerShell -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -PassThru; $form.Hide()
                 }
             }
         } elseif ($script:action -eq 'Detect') {
@@ -173,6 +187,7 @@ $timer.Add_Tick({
             $apply.Enabled=$false
             if($result.Result.Valid){$status.Text=$(if(Test-SelectedBuildTested){'Setup is installed. FPS activation is checked when Maneater starts.'}else{'Setup is installed for this untested build. FPS may remain inactive if engine checks fail.'});$play.Enabled=$true;foreach($row in $list.Items){if($row.SubItems[1].Text -eq 'Ready'){$row.SubItems[1].Text=$(if($row.Text -in @('Native FPS fix','Character recovery','Navigation','Package loading')){'Installed'}else{'Applied'})}}}
             else{$status.Text='The setup changed: '+$result.Result.Reason+' Use Restore, then apply again.'}
+            if($result.Result.Valid-and$null-ne$result.Result.PSObject.Properties['BundleUpdateAvailable']-and$result.Result.BundleUpdateAvailable){$status.Text='Launcher updated. Click Apply all fixes to update the game setup.';$apply.Enabled=$true}
         } elseif ($script:action -eq 'Apply') {
             $script:plan=$result.Result.Plan
             $status.Text=$(if(Test-SelectedBuildTested){'Setup installed. Play Maneater; FPS activation is checked at startup.'}else{'Setup installed for this untested build. FPS may remain inactive if engine checks fail.'}); $play.Enabled=$true; $apply.Enabled=$false
@@ -200,4 +215,12 @@ try {
         $bitmap=New-Object Drawing.Bitmap($form.Width,$form.Height)
         try{$form.DrawToBitmap($bitmap,(New-Object Drawing.Rectangle(0,0,$form.Width,$form.Height)));$bitmap.Save((Join-Path $root 'dist\launcher-preview.png'),[Drawing.Imaging.ImageFormat]::Png)}finally{$bitmap.Dispose()}
     } else { [Windows.Forms.Application]::Run($form) }
-} finally { $timer.Stop(); $timer.Dispose(); $form.Dispose() }
+} finally {
+    $timer.Stop(); $timer.Dispose(); $form.Dispose()
+    if(-not$RenderPreview){
+        $instancePath=Join-Path $local 'launcher-instance.json'
+        try{if([IO.File]::Exists($instancePath)-and(Get-Content $instancePath -Raw|ConvertFrom-Json).Pid-eq$PID){[IO.File]::Delete($instancePath)}}catch{}
+    }
+    if($script:launcherLock){$script:launcherLock.Dispose()}
+    if($script:activeLock){$script:activeLock.Dispose()};if($script:elevatedChild){$script:elevatedChild.Dispose()}
+}
