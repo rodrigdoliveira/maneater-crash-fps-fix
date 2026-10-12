@@ -1,3 +1,5 @@
+![Maneater Crash & FPS Fix](docs/assets/banner.png)
+
 # Maneater Crash & FPS Fix
 
 A free, open-source Windows launcher that applies the Maneater crash/FPS repair setup and native recovery, navigation and loading optimizations from one window. **v0.8.0** includes ready-built binaries and their matching full sources.

@@ -8,6 +8,7 @@
 *.ps1 text eol=lf
 *.psm1 text eol=lf
 *.md text eol=lf
+*.png binary
 LICENSE text eol=lf
 .gitignore text eol=lf
 .gitattributes text eol=lf

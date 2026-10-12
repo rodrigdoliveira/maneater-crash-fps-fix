@@ -13,6 +13,7 @@
     "THIRD_PARTY.txt",
     "Updater.ps1",
     "build.ps1",
+    "docs/assets/banner.png",
     "docs/crash-workarounds.md",
     "docs/gameplay-validation.md",
     "docs/release-notes-0.7.0.md",
