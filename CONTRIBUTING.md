@@ -42,4 +42,8 @@ Keep the current evidence scopes separate: gameplay verification used the earlie
 
 Submit original material or identify its source and compatible license. Contributions to this project's original code and documentation are distributed under its [MIT license](LICENSE). Keep any required third-party notices when introducing a dependency.
 
-The repository is source-only; the launcher builds automatically. Changes beyond the retained repair bundle require support, reversibility and evidence of benefit.
+The Git repository and GitHub's automatic source archives contain developer sources. The custom ready-to-run release ZIP additionally includes the compiled project mod, its matching build manifest and export definition, and full sources. Normal Apply validates that package without compiling or downloading a compiler. Developers build manually with `build.ps1`; installation copies the verified Windows DXGI DLL from the user's own PC, never from a release asset.
+
+Package releases from an explicit file list. Match the compiled DLL, manifest, export definition and source hashes to the release source revision. Exclude Windows/game DLLs, compilers, PDBs, test executables, caches, logs and `.local` records or backups. Validate the extracted ZIP, its DLL hash, exports and dependencies, and publish the ZIP checksum. Cover missing, stale, corrupt and incompatible prebuilt-package refusal, same-export-contract Windows files with different hashes, and the absence of a compiler/download fallback before repair changes.
+
+Changes beyond the retained repair bundle require support, reversibility and evidence of benefit.

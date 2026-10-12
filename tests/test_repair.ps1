@@ -102,6 +102,33 @@ function Same-NativeRecord($Case,$Expected){
     $current=Get-Content -LiteralPath (Join-Path $Case.Root '.local\installation.json') -Raw|ConvertFrom-Json
     return ($current|ConvertTo-Json -Depth 30 -Compress) -ceq ($Expected|ConvertTo-Json -Depth 30 -Compress)
 }
+function Use-RealBundleReadiness($Case){
+    # Exercise the production readiness function with real provenance hashes.
+    # Only Windows-signature/export parsing remains a fixture boundary.
+    [IO.Directory]::CreateDirectory((Join-Path $Case.Root 'src'))|Out-Null
+    [IO.File]::WriteAllText((Join-Path $Case.Root 'src\maneater_fps_hook.c'),'fixture source; never compiled')
+    [IO.File]::WriteAllText((Join-Path $Case.Root 'build.ps1'),"[IO.File]::WriteAllText((Join-Path `$PSScriptRoot '.local\build-was-called'),'tripwire'); throw 'Build fallback tripwire'")
+    $definition=Join-Path $Case.Root 'dist\dxgi_proxy.def';[IO.File]::WriteAllText($definition,'fixture export definition')
+    $hashes=[ordered]@{}
+    foreach($relative in @('src/maneater_fps_hook.c','scripts/PeExports.psm1','build.ps1','Manage-Mod.ps1')){$hashes[$relative]=Hash (Join-Path $Case.Root $relative)}
+    $exports=@([pscustomobject]@{Name='Alpha';Ordinal=1},[pscustomobject]@{Name='Beta';Ordinal=2})
+    $contract=& $Case.Module {param($Exports) Get-ExportContractHash -Exports $Exports} $exports
+    $manifest=[pscustomobject]@{SchemaVersion=1;GameSHA256=(Hash $Case.Exe);TargetFPS=120;ModSHA256=(Hash $Case.Mod);DefinitionSHA256=(Hash $definition);SystemExportsSHA256=$contract;ModExportsSHA256=$contract;SystemExports=$exports;BuildSystemDLLSHA256=(Hash $Case.System);SourceHashes=$hashes}
+    [IO.File]::WriteAllText((Join-Path $Case.Root 'dist\build.json'),($manifest|ConvertTo-Json -Depth 6))
+    $tokens=$null;$errors=$null
+    $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $sourceRoot 'scripts\Repair.psm1'),[ref]$tokens,[ref]$errors)
+    $function=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-RepairBuildReady'},$true)
+    $definitionText=$function.Extent.Text.Replace('function Get-RepairBuildReady','function script:Get-RepairBuildReady')
+    & $Case.Module {
+        param($Definition,$SystemPath,$Contract)
+        Invoke-Expression $Definition
+        $script:FixtureSystemPath=$SystemPath;$script:FixtureExportContract=$Contract;$script:FixtureProxyContract=$Contract;$script:CompilerTripwireCount=0
+        function script:Get-RepairCompiler {$script:CompilerTripwireCount++;throw 'Compiler/network fallback tripwire'}
+        function script:Get-VerifiedWindowsDxgi {[pscustomobject]@{Path=$script:FixtureSystemPath;Table=[pscustomobject]@{Path=$script:FixtureSystemPath;FileSHA256=$script:FixtureSystemHash;ContractSHA256=$script:FixtureExportContract}}}
+        function script:Get-PeExportTable {param($Path) [pscustomobject]@{Path=$Path;FileSHA256=(Get-RepairHash $Path);ContractSHA256=$script:FixtureProxyContract}}
+        function script:Assert-DxgiForwarderTable {param($Proxy,$System) if($Proxy.ContractSHA256 -cne $System.ContractSHA256){throw 'Fixture Windows export contract differs.'}}
+    } $definitionText $Case.System $contract
+}
 function Manual-Journal($Case,[string]$Action){
     $plan=& $Case.Module {param($Exe,$Context) Get-ManeaterRepairPlan -GameExecutable $Exe -SteamContext $Context} $Case.Exe $Case.Context
     $plan.Native.Action=$Action;$plan.Native.InstalledHash=Hash $Case.Mod;$plan.Native.InstalledSystemHash=Hash $Case.System
@@ -266,6 +293,55 @@ try{
     Assert-Test (-not (Test-CaseState $case $journal).Valid) 'unknown applied state with changed executable is invalid'
     Restore-Case $case|Out-Null
     Assert-Test ((Read-Journal $case).Status -ceq 'restored' -and (Hash $case.Ansel) -ceq $sdkHash -and (Same-Config $case) -and -not [IO.File]::Exists((Join-Path $case.Bin 'dxgi.dll'))) 'untested restore leaves skipped SDK unchanged and removes only owned modifications'
+
+    $case=New-Scenario 'ready-bundle-only';Use-RealBundleReadiness $case
+    Assert-Test ((& $case.Module {Get-RepairBuildReady})) 'complete prebuilt bundle passes actual provenance/export readiness'
+    $journal=Invoke-Case $case
+    Assert-Test ($journal.Status -ceq 'applied' -and (& $case.Module {$script:CompilerTripwireCount}) -eq 0 -and -not [IO.File]::Exists((Join-Path $case.Root '.local\build-was-called')) -and -not [IO.Directory]::Exists((Join-Path $case.Root '.local\tools'))) 'ready bundle applies without compiler/build/network fallback or tool cache'
+    Restore-Case $case|Out-Null
+
+    foreach($failure in @('missing','damaged','stale','contract')){
+        $case=New-Scenario ('bundle-'+$failure);Use-RealBundleReadiness $case
+        switch($failure){
+            'missing'{[IO.File]::Delete($case.Mod)}
+            'damaged'{[IO.File]::WriteAllText($case.Mod,'damaged bundled proxy')}
+            'stale'{[IO.File]::AppendAllText((Join-Path $case.Root 'build.ps1'),"`n# source changed after bundling")}
+            'contract'{& $case.Module {$script:FixtureExportContract='F'*64}}
+        }
+        & $case.Module {$script:WritableProbeCount=0;function script:Assert-RepairWritable {param($Directory) $script:WritableProbeCount++;throw 'Writable probe tripwire'}}
+        $message='';try{Invoke-Case $case|Out-Null}catch{$message=$_.Exception.Message}
+        Assert-Test ($message -like 'The ready-to-run mod bundle*' -and $message -match 'release ZIP' -and $message -match 'build.ps1') "$failure bundle fails with ready-release/manual-build action"
+        Assert-Test ((& $case.Module {$script:WritableProbeCount}) -eq 0 -and (& $case.Module {$script:CompilerTripwireCount}) -eq 0 -and -not [IO.File]::Exists((Join-Path $case.Root '.local\build-was-called'))) "$failure bundle stops before writable probes/compiler/build fallback"
+        Assert-Test ((Same-Config $case) -and [IO.File]::Exists($case.Ansel) -and -not [IO.File]::Exists((Join-Path $case.Root '.local\repair.json')) -and -not [IO.Directory]::Exists((Join-Path $case.Root '.local\backups')) -and -not [IO.File]::Exists((Join-Path $case.Bin 'dxgi.dll'))) "$failure bundle writes no repair journal/backups/game/settings"
+    }
+
+    $case=New-Scenario 'same-export-new-windows-dll';Use-RealBundleReadiness $case
+    $oldSystemHash=Hash $case.System
+    [IO.File]::WriteAllText($case.System,'fixture newer Windows DLL with unchanged exports')
+    & $case.Module {param($Hash) $script:FixtureSystemHash=$Hash} (Hash $case.System)
+    Assert-Test ((Hash $case.System) -cne $oldSystemHash -and (& $case.Module {Get-RepairBuildReady})) 'different local Windows DLL bytes do not invalidate unchanged verified export contract'
+    $journal=Invoke-Case $case
+    Assert-Test ($journal.Status -ceq 'applied' -and $journal.Plan.Native.InstalledSystemHash -ceq (Hash $case.System)) 'same-export Windows update installs current local copy without rebuilding'
+    Restore-Case $case|Out-Null
+
+    foreach($corruption in @('schema','recorded-exports','mod-exports','proxy-snapshot')){
+        $case=New-Scenario ('manifest-'+$corruption);Use-RealBundleReadiness $case
+        $oldRecord=Set-OldNative $case
+        $manifestPath=Join-Path $case.Root 'dist\build.json'
+        $manifest=Get-Content -LiteralPath $manifestPath -Raw|ConvertFrom-Json
+        switch($corruption){
+            'schema'{$manifest.SchemaVersion=2}
+            'recorded-exports'{$manifest.SystemExports[0].Ordinal=77}
+            'mod-exports'{$manifest.ModExportsSHA256='0'*64}
+            'proxy-snapshot'{& $case.Module {function script:Get-PeExportTable {param($Path) [pscustomobject]@{Path=$Path;FileSHA256=('0'*64);ContractSHA256=$script:FixtureProxyContract}}}}
+        }
+        [IO.File]::WriteAllText($manifestPath,($manifest|ConvertTo-Json -Depth 6))
+        & $case.Module {$script:WritableProbeCount=0;function script:Assert-RepairWritable {param($Directory) $script:WritableProbeCount++;throw 'Writable probe tripwire'}}
+        $message='';try{Invoke-Case $case|Out-Null}catch{$message=$_.Exception.Message}
+        Assert-Test ($message -like 'The ready-to-run mod bundle*') "$corruption manifest is refused during ready-package preflight"
+        Assert-Test ((& $case.Module {$script:WritableProbeCount}) -eq 0 -and (& $case.Module {$script:CompilerTripwireCount}) -eq 0 -and -not [IO.File]::Exists((Join-Path $case.Root '.local\repair.json')) -and -not [IO.Directory]::Exists((Join-Path $case.Root '.local\backups'))) "$corruption manifest creates no writable probe/journal/backup/fallback"
+        Assert-Test ((Same-NativeRecord $case $oldRecord) -and (Hash (Join-Path $case.Bin 'dxgi.dll')) -ceq $oldRecord.ModSHA256 -and (Hash (Join-Path $case.Bin 'dxgi_codex_system.dll')) -ceq $oldRecord.SystemSHA256 -and (Same-Config $case) -and [IO.File]::Exists($case.Ansel)) "$corruption manifest preserves an owned upgrade's old pair/state/settings"
+    }
 
     Write-Output "PASS: $script:passed composite repair contracts; isolated fake installation only."
 }finally{

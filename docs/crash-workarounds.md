@@ -4,13 +4,15 @@ The [launcher in the README](../README.md) applies these changes together: the n
 
 The native DLL itself implements only the FPS correction. The advanced `Manage-Mod.ps1` installer also handles only that native mod; the GUI repair coordinates the other changes. The instructions below explain those changes and provide manual alternatives for people who do not use the GUI. They are not extra steps required after **Apply all fixes**.
 
+Use the custom **Maneater-Crash-FPS-Fix.zip** release asset for ready-to-run installation: it includes the compiled project mod and matching sources, without a compiler download. GitHub's automatic source archives are for developers who build manually. The Windows DXGI DLL is copied from your PC during installation and is not distributed. A missing or invalid package, or a mismatched Windows export-name/ordinal contract, stops repair changes instead of compiling automatically. See [README compatibility and development](../README.md#compatibility).
+
 Short tests and a longer play session were crash-free with the combined setup. This does not identify which change prevented a crash, establish one common cause for earlier exceptions, or prove stability on other systems. None changes graphics-quality settings, game configuration files or saved games; Ansel and overlay features have the tradeoffs described below.
 
 The [README compatibility section](../README.md#compatibility) identifies the executable used for the investigation. Recheck compatibility after a game update. Keep a record of existing launch options and file names before trying a step; compare the same gameplay conditions and restore a change if it causes problems.
 
 ## Experimental use with another Steam build
 
-The launcher can preview an untested Windows x64 executable, but refuses to apply fixes to it by default. Version 0.3.0 offers **Allow an untested build (experimental)** and a separate warning that must be accepted for each apply operation. This is limited to the selected installation belonging to Steam's Maneater app 629820; it does not extend support to another storefront or to a copied executable. The private repair journal records the actual game hash.
+The launcher can preview an untested Windows x64 executable, but refuses to apply fixes to it by default. Version 0.4.0 retains **Allow an untested build (experimental)** and a separate warning that must be accepted for each apply operation. This is limited to the selected installation belonging to Steam's Maneater app 629820; it does not extend support to another storefront or to a copied executable. The private repair journal records the actual game hash.
 
 The option does not establish that the complete bundle works on that build. It can relax native version-metadata checks while preserving exact code signatures, image bounds, object layout and caller checks. Installed FPS-mod files can leave the game unchanged when the native hook declines. Check `maneater_codex_fps.log` for the current launch, without reusing an older launch's entries: an installation message or native `INSTALLED` entry is not a verified FPS redirect. `REDIRECTED` confirms the matching 60-to-120 request; `PASS-THROUGH` indicates that the native guard declined. Neither a redirect nor a crash-free session establishes that every retained workaround is effective.
 

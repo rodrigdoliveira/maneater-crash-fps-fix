@@ -37,7 +37,7 @@ $list.Columns.Add('Fix',174) | Out-Null; $list.Columns.Add('Status',112) | Out-N
 function Set-FixRow { param([string]$Name,[string]$Status,[string]$Detail) $item=New-Object Windows.Forms.ListViewItem($Name); $item.SubItems.Add($Status)|Out-Null; $item.SubItems.Add($Detail)|Out-Null; $item.ToolTipText=$Detail; $list.Items.Add($item)|Out-Null }
 function Show-DefaultRows {
     $list.Items.Clear()
-    Set-FixRow 'Native FPS fix' 'Waiting' 'Corrects the forced 60 FPS request to 120 FPS.'
+    Set-FixRow 'Native FPS fix' 'Waiting' 'Installs the included mod; compatible engine calls redirect 60 FPS to 120 FPS.'
     Set-FixRow 'OpenSSL crash fix' 'Waiting' 'Sets the official compatibility flag for Maneater only.'
     Set-FixRow 'CPU scheduling' 'Detecting' 'Chooses performance cores and worker count where applicable.'
     Set-FixRow 'Ansel' 'Waiting' 'Disables the bundled photo-mode SDK; restore is available.'
@@ -51,7 +51,7 @@ $bar = New-Object Windows.Forms.ProgressBar; $bar.SetBounds(24,482,812,7); $bar.
 $apply = New-Object Windows.Forms.Button; $apply.Text='Apply all fixes'; $apply.SetBounds(24,514,190,42); $apply.BackColor=[Drawing.Color]::FromArgb(20,98,155); $apply.ForeColor=[Drawing.Color]::White; $apply.FlatStyle='Flat'; $apply.Enabled=$false; $apply.Anchor='Bottom,Left'; $form.Controls.Add($apply)
 $play = New-Object Windows.Forms.Button; $play.Text='Play Maneater'; $play.SetBounds(230,514,180,42); $play.Enabled=$false; $play.Anchor='Bottom,Left'; $form.Controls.Add($play)
 $restore = New-Object Windows.Forms.Button; $restore.Text='Restore previous setup'; $restore.SetBounds(590,514,246,42); $restore.Enabled=$false; $restore.Anchor='Bottom,Right'; $form.Controls.Add($restore)
-$note = Add-Label 'First use builds automatically and may download a verified compiler (100 MB). Keep this folder for Restore. Installed means files/settings are saved; the FPS hook checks compatibility at game startup.' 24 573 812 60
+$note = Add-Label 'The ready-to-run ZIP includes the compiled FPS mod; no compiler download is needed. Keep this folder for Restore. Installed means files/settings are saved; FPS checks run at game startup.' 24 573 812 60
 $note.Anchor='Bottom,Left,Right'; $note.ForeColor=[Drawing.Color]::FromArgb(74,86,101)
 
 function Get-SavedRepair {

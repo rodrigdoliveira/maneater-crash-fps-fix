@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $script:Root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $script:SupportedGameHash = 'CC34E43BBD1F757E3883ADAF37D643C1A0FB2963967CA33AF7CB6CB8F54480C0'
 $script:LegacyModHash = '5C9EF79C6F5EBC99DB15E62E883F5635FF4133442BFDE6891D98A38A1B9129E6'
-foreach ($name in @('PeExports', 'Compiler', 'CpuPlan', 'SteamFix', 'AnselFix')) { Import-Module (Join-Path $PSScriptRoot ($name + '.psm1')) -Force -DisableNameChecking }
+foreach ($name in @('PeExports', 'CpuPlan', 'SteamFix', 'AnselFix')) { Import-Module (Join-Path $PSScriptRoot ($name + '.psm1')) -Force -DisableNameChecking }
 function Get-RepairHash { param([string]$Path) (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
 function Write-RepairJson {
     param([string]$Path, $Value)
@@ -69,14 +69,17 @@ function Test-RepairAnselSkipped {
 function Get-RepairBuildReady {
     try {
         $manifest = Get-Content -LiteralPath (Join-Path $script:Root 'dist\build.json') -Raw | ConvertFrom-Json
-        if ($manifest.GameSHA256 -cne $script:SupportedGameHash -or $manifest.TargetFPS -ne 120) { return $false }
+        if ($manifest.SchemaVersion -ne 1 -or $manifest.GameSHA256 -cne $script:SupportedGameHash -or $manifest.TargetFPS -ne 120) { return $false }
         foreach ($relative in @('src/maneater_fps_hook.c','scripts/PeExports.psm1','build.ps1','Manage-Mod.ps1')) {
             if ((Get-RepairHash (Join-Path $script:Root $relative)) -cne $manifest.SourceHashes.PSObject.Properties[$relative].Value) { return $false }
         }
         if ((Get-RepairHash (Join-Path $script:Root 'dist\dxgi.dll')) -cne $manifest.ModSHA256 -or
             (Get-RepairHash (Join-Path $script:Root 'dist\dxgi_proxy.def')) -cne $manifest.DefinitionSHA256) { return $false }
         $system = Get-VerifiedWindowsDxgi
+        if ($system.Table.ContractSHA256 -cne $manifest.SystemExportsSHA256 -or
+            (Get-ExportContractHash -Exports @($manifest.SystemExports)) -cne $manifest.SystemExportsSHA256) { return $false }
         $proxy = Get-PeExportTable (Join-Path $script:Root 'dist\dxgi.dll')
+        if ($proxy.FileSHA256 -cne $manifest.ModSHA256 -or $proxy.ContractSHA256 -cne $manifest.ModExportsSHA256) { return $false }
         Assert-DxgiForwarderTable -Proxy $proxy -System $system.Table
         return ($system.Table.ContractSHA256 -ceq $manifest.SystemExportsSHA256)
     } catch { return $false }
@@ -293,14 +296,12 @@ function Invoke-ManeaterRepair {
     if(-not $selected.TestedBuild -and -not $AllowUntestedBuild){throw 'Untested Maneater build. Enable Allow an untested build (experimental) to try it. No changes made.'}
     & $Progress 'Checking the game, Steam settings, and CPU topology...'
     $plan = Get-ManeaterRepairPlan -GameExecutable $GameExecutable -SteamContext $SteamContext
+    if (-not $plan.BuildReady) {
+        throw 'The ready-to-run mod bundle is missing, damaged, stale, or incompatible with this Windows DXGI export contract. Download and fully extract the ready-to-run release ZIP. Developers can rebuild manually using build.ps1 -ZigPath <compiler path>. No game files or settings changed.'
+    }
     Assert-RepairWritable $plan.Game.Bin
     Assert-RepairWritable ([IO.Path]::GetDirectoryName($plan.SteamContext.ConfigPath))
-    if (-not $plan.BuildReady) {
-        $compiler = Get-RepairCompiler -CacheDirectory (Join-Path $script:Root '.local\tools') -Progress $Progress
-        & $Progress 'Building the FPS mod for this Windows installation...'
-        & (Join-Path $script:Root 'build.ps1') -ZigPath $compiler | Out-Null
-    }
-    # All potentially slow/download operations precede game/settings changes.
+    # Apply uses only the validated bundled mod; it never downloads or builds.
     Assert-RepairProcessesClosed
     if ($plan.Game.GameSHA256 -cne $selected.GameSHA256 -or (Get-RepairHash $plan.Game.Executable) -cne $plan.Game.GameSHA256) { throw 'Game executable changed during preparation.' }
     $build = Get-Content -LiteralPath (Join-Path $script:Root 'dist\build.json') -Raw | ConvertFrom-Json

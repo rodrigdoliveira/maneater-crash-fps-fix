@@ -5,7 +5,7 @@ Set-StrictMode -Version Latest
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if (-not [Environment]::Is64BitProcess) { throw 'Use 64-bit Windows PowerShell.' }
 $powershell = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
-foreach ($test in @('test_scripts.ps1','test_cpu_plan.ps1','test_ansel.ps1','test_steam.ps1','test_repair.ps1','test_launcher.ps1','test_compiler.ps1')) {
+foreach ($test in @('test_scripts.ps1','test_cpu_plan.ps1','test_ansel.ps1','test_steam.ps1','test_repair.ps1','test_launcher.ps1','test_compiler.ps1','test_release.ps1')) {
     & $powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot $test)
     if ($LASTEXITCODE -ne 0) { throw "Contract test failed: $test" }
 }

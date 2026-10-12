@@ -4,17 +4,19 @@ A free, open-source Windows launcher that applies the complete Maneater repair s
 
 ## Download and run
 
-1. [Download the launcher ZIP](https://github.com/rodrigdoliveira/maneater-crash-fps-fix/releases/latest/download/Maneater-Crash-FPS-Fix.zip) and extract it into a folder you will keep.
+1. [Download the ready-to-run launcher ZIP](https://github.com/rodrigdoliveira/maneater-crash-fps-fix/releases/latest/download/Maneater-Crash-FPS-Fix.zip) and extract it into a folder you will keep.
 2. Double-click **Start.cmd**.
 3. Select **Maneater.exe** or **Maneater-Win64-Shipping.exe**, then click **Apply all fixes**.
 
-The launcher detects your CPU, verifies the game build, builds the native mod, backs up the previous setup, and applies the fixes. No compiler commands or manual Steam launch-option edits are required. First use may download the pinned [Zig compiler](https://ziglang.org/download/) from ziglang.org (100 MB), with SHA-256 verification. Later runs reuse the local build and tool cache.
+The **v0.4.0 ready-to-run release ZIP** includes the compiled project mod and its matching full sources. No compiler or compiler download is required. The launcher validates the included mod, detects your CPU, verifies the game build, backs up the previous setup, and applies the fixes. Manual Steam launch-option edits are not required.
+
+Choose the release asset named **Maneater-Crash-FPS-Fix.zip**. GitHub's automatic **Source code (zip/tar.gz)** downloads and repository clones are developer sources and require a manual build; the launcher does not compile or download a compiler for them.
 
 Quit Maneater first. The launcher asks to close Steam briefly to save its per-game settings; **Play Maneater** starts the game through Steam again. If Windows restricts access to the game folder, the launcher offers to restart with administrator access. Keep the extracted folder: its private `.local` directory contains your restore record and backups.
 
-To update an existing setup, use the previous launcher's **Restore previous setup** first. Then replace the launcher source files with the new ZIP, retain `.local` and its backups, and apply again. An already applied repair is not automatically upgraded. A new launcher folder without the ownership records will preserve an existing, untracked mod DLL pair.
+To update an existing setup, use the previous launcher's **Restore previous setup** first. Then replace all launcher files, including `dist`, with the new ready-to-run ZIP, retain `.local` and its backups, and apply again. An already applied repair is not automatically upgraded. A new launcher folder without the ownership records will preserve an existing, untracked mod DLL pair.
 
-Version **0.3.0** also offers an explicit experimental opt-in for an untested Steam build. The tested-build check remains the default. See [Compatibility](#compatibility) before using that option.
+Version **0.4.0** retains the explicit experimental opt-in for an untested Steam build. The tested-build check remains the default. See [Compatibility](#compatibility) before using that option.
 
 ## What Apply all fixes does
 
@@ -32,7 +34,7 @@ These are the complete retained changes from the tested setup. They are not addi
 
 ## Compatibility
 
-Windows x64, Steam app **629820**. The tested reference is Steam build **7837297**, with shipping executable SHA-256:
+Windows **10/11 x64**, Steam app **629820**. The compiled mod uses the Universal C Runtime [included with these Windows versions](https://learn.microsoft.com/en-us/cpp/windows/universal-crt-deployment?view=msvc-170). The tested reference is Steam build **7837297**, with shipping executable SHA-256:
 
 ```text
 CC34E43BBD1F757E3883ADAF37D643C1A0FB2963967CA33AF7CB6CB8F54480C0
@@ -45,6 +47,8 @@ This option is limited to an installation identified as Maneater in the current 
 Opting in permits an experiment; it does not establish compatibility. It can relax the native version-metadata check, while keeping exact code signatures, image bounds, object layout and call-site guards. The FPS hook may decline to change anything if the game differs. An unrecognized Ansel SDK is preserved, that step is skipped, and the launcher reports a warning. The retained workarounds and their benefits also remain unverified on that build. Use **Restore previous setup** if the experiment does not help.
 
 CPU settings are derived from Windows topology, with no preset mask or core count copied from a developer's PC. The bundle does not impose a particular GPU model.
+
+The included mod also requires a matching Windows DXGI export contract: exported names and ordinals must agree with the verified local Windows library. That Windows DLL is copied from your PC during installation, not distributed in the ZIP. A different local Windows DLL file hash alone is acceptable when the export contract matches. Missing, stale or corrupt packaged files, or an incompatible export contract, stop the repair before it changes game files or Steam settings. There is no automatic compilation fallback; download a compatible ready release or use the developer build instructions below.
 
 ### Installed files versus an applied FPS correction
 
@@ -62,9 +66,9 @@ The gameplay tests cover the tested executable on one hardware configuration. Th
 
 ## Development
 
-All launcher and native sources are included under the [MIT license](LICENSE). No game or Windows DLL, save, private trace, or compiler binary is distributed. The launcher builds its DXGI forwarder from the current local Windows export contract and installs an unchanged, verified local Windows DXGI copy beside it. Existing proxy files belonging to other mods are preserved.
+The Git repository and GitHub's automatic source archives contain sources under the [MIT license](LICENSE). The custom ready-to-run release ZIP also includes the compiled project DXGI forwarder, its build manifest and export definition, and matching sources. No game or Windows DLL, save, private trace, or compiler binary is distributed. Installation copies an unchanged, verified local Windows DXGI DLL beside the project mod. Existing proxy files belonging to other mods are preserved.
 
-For a manual build, use 64-bit Windows PowerShell:
+For a developer build from a clone or source archive, obtain [Zig](https://ziglang.org/download/) and use 64-bit Windows PowerShell. The build generates a forwarder for the current local Windows export contract:
 
 ```powershell
 .\build.ps1 -ZigPath 'D:\Tools\Zig\zig.exe'
@@ -82,6 +86,6 @@ The native manager handles only its DLL pair. Normal users should use **Start.cm
 
 For advanced manual installation, add `-AllowUntestedBuild` to the manager's `-Action Install` command. That authorizes installation on an untested executable; it does not enable the native runtime opt-in or configure Steam. The game's own process must receive the exact environment value `MANEATER_FIX_ALLOW_UNTESTED=1` to permit experimental native metadata checks. Keep that assignment scoped to the game launch. The GUI configures it automatically for an accepted untested-build trial and sets it to `0` for the tested build.
 
-Run the isolated fixture suite with `tests\Run-All.ps1`. These tests use temporary game/config fixtures; they do not modify a real installation. Native contract tests cover guard rejection and forwarding. Actual matching-caller behavior was separately verified during gameplay with the earlier tested-build FPS core, not the new experimental-build path.
+Run the isolated developer fixture suite with `tests\Run-All.ps1 -ZigPath 'D:\Tools\Zig\zig.exe'`. These tests use temporary game/config fixtures; they do not modify a real installation. Native contract tests cover guard rejection and forwarding. Actual matching-caller behavior was separately verified during gameplay with the earlier tested-build FPS core, not the new experimental-build path.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for reports and development rules, and [the technical background](docs/crash-workarounds.md) for individual changes. This is an unofficial community project; the license covers this project's original source, not third-party software.
