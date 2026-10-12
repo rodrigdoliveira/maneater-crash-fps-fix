@@ -1,0 +1,36 @@
+# Locally generated build artifacts and installation state
+/dist/
+/.local/
+/cache/
+/.zig-cache/
+/zig-out/
+/tests/.tmp-*/
+/tests/.tmp/
+
+# Binaries and compiler/linker intermediates
+*.dll
+*.exe
+*.pdb
+*.obj
+*.o
+*.lib
+*.exp
+*.ilk
+
+# Private diagnostic data and saves
+*.log
+*.csv
+*.dmp
+*.etl
+*.sav
+*.ushaderbytecode
+*.upipelinecache
+/backups/
+/CrashDumps/
+/Saved/
+
+# Editor and temporary files
+/.vs/
+*.tmp
+*.bak
+*~
