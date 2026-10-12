@@ -40,13 +40,11 @@ See [the release notes](docs/release-notes-0.7.0.md) for version history and val
 
 ## Upgrade and restore
 
-For an upgrade, extract v0.7.0 into a **new folder** and run its launcher. The new folder can recognize and back up the reviewed v0.6.0, v0.7.0-preview.1 and latest private native files already beside the game. Keep the earlier launcher folder and its recovery records too. If you reuse a folder with an already applied repair journal, first use that folder's old launcher to **Restore previous setup**, then replace its package files and apply v0.7.0. An existing applied journal is not an automatic upgrade.
+- **Update:** Extract the latest release into a **new folder**, run **Start.cmd**, and click **Apply all fixes**.
+- **Restore:** Quit Maneater and click **Restore previous setup** in the launcher that applied the fixes.
+- **Keep your backups:** Keep the old and new launcher folders, including `.local`.
 
-**Apply all fixes** recognizes the reviewed public native v0.2 pair used by v0.6.0 and the reviewed v0.7.0-preview.1 and private predecessor pairs. It backs up the recognized previous files and records the complete installed tuple, including whether a helper existed. Unknown DLLs/helpers or conflicting ownership records are preserved by refusing replacement.
-
-**Restore previous setup** restores the complete previous owned setup from that record, including the previous DLL/helper tuple and launcher-managed settings. If another tool has changed a tracked file or setting, restore preserves that change instead of blindly overwriting it. Backups and ownership records are part of the installation; keep them with the launcher.
-
-Existing ordinary game arguments and recognized OpenSSL wrappers are preserved or safely normalized. Arbitrary custom launch wrappers and foreign DXGI mods are not overwritten. File replacements are atomic individually, but several files/settings are coordinated through the recovery record rather than one filesystem transaction.
+If you reuse a launcher folder, restore with its old launcher before replacing its files. Restore preserves changes made by other tools.
 
 ## Why the CPU fix matters
 
