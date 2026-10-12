@@ -39,6 +39,6 @@ The original chest-down wrapper was not fully recovered, so equivalence to the r
 
 Not included: the unsuccessful recovery-event asset guard, rejected get-up list compaction, persistent navigation caches, speculative queue changes, or the reverse-punctuation prototype from the later static audit. No new graphics-quality reduction or CPU tuning is introduced.
 
-See [README](../README.md) for running, restoration, startup status and development instructions. Keep the extracted folder and its `.local` recovery records; do not run concurrent mod installers.
+See [README](../README.md) for running, restoration and development instructions. Keep the extracted folder and its `.local` recovery records; do not run concurrent mod installers.
 
 Use a newly extracted folder to upgrade recognized existing public/private native files. If reusing a launcher folder with an applied journal, restore that folder's old setup before replacing its package files and applying v0.7.0.

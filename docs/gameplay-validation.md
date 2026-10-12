@@ -20,4 +20,4 @@ Read-only inspection of the test's startup output confirmed:
 
 Offline validation also covers the installer/restore workflow, native forwarding and ownership, navigation rejection decisions, x64 unwind behavior and attachment rollback. Raw logs, process identifiers, personal paths, game files and captures are excluded from the repository and release.
 
-Known technical limits are documented in the [README](../README.md#results-and-limits). The positive gameplay result supports publishing v0.7.0 as a regular release; it does not establish identical results on every PC.
+Known technical limits are documented in the [release notes](release-notes-0.7.0.md#evidence-and-remaining-limits). The positive gameplay result supports publishing v0.7.0 as a regular release; it does not establish identical results on every PC.
