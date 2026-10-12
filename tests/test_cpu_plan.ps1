@@ -90,6 +90,14 @@ Check-Throws {New-ManeaterLaunchOptions -ExistingOptions '-name="unterminated' -
 Check-Throws {New-GameLaunchPlan -CpuPlan $plan -ExePath 'D:\Games\%variable%\game.exe'} 'unsafe percent expansion in executable path rejected'
 $noRestriction=New-GameLaunchPlan -CpuPlan $amd -ExistingOptions '-dx11'
 Check (-not $noRestriction.CpuApplied -and $noRestriction.GameArguments -ceq '-dx11') 'AMD gets OpenSSL wrapper without invented CPU restriction'
+$experiment=New-GameLaunchPlan -CpuPlan $plan -ExistingOptions '-dx11' -AllowUntestedBuild
+Check ($experiment.UntestedBuildOptIn -and $experiment.EnvironmentOverrides.MANEATER_FIX_ALLOW_UNTESTED -ceq '1') 'explicit trial generates a game-scoped exact1 flag'
+Check ($experiment.SteamLaunchOptions -match 'set "MANEATER_FIX_ALLOW_UNTESTED=1" &&') 'Steam wrapper carries the trial flag into the game'
+$again=New-GameLaunchPlan -CpuPlan $plan -ExistingOptions $experiment.SteamLaunchOptions -AllowUntestedBuild
+Check ($again.SteamLaunchOptions -ceq $experiment.SteamLaunchOptions) 'experimental wrapper roundtrip is stable'
+$normal=New-GameLaunchPlan -CpuPlan $plan -ExistingOptions $experiment.SteamLaunchOptions
+Check ($normal.EnvironmentOverrides.MANEATER_FIX_ALLOW_UNTESTED -ceq '0' -and $normal.SteamLaunchOptions -notmatch 'MANEATER_FIX_ALLOW_UNTESTED=1') 'tested mode clears the previous experimental flag'
+Check-Throws {New-GameLaunchPlan -CpuPlan $plan -ExistingOptions ($experiment.SteamLaunchOptions.Replace('MANEATER_FIX_ALLOW_UNTESTED=1','MANEATER_FIX_ALLOW_UNTESTED=anything'))} 'arbitrary experiment values or commands are not preserved'
 $readOnly=Get-WindowsCpuTopology
 Check ($readOnly.Succeeded -and $readOnly.CpuSets.Count -gt 0) 'read-only local native enumeration smoke check'
 "PASS: $passed CPU-buffer, topology, launch-merge, and read-only API contracts. No game/process settings changed."

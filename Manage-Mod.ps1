@@ -1,5 +1,6 @@
 [CmdletBinding()]
-param([ValidateSet('Install', 'Uninstall', 'Status')][string]$Action = 'Status', [string]$GameDirectory)
+param([ValidateSet('Install', 'Uninstall', 'Status')][string]$Action = 'Status', [string]$GameDirectory,
+      [switch]$AllowUntestedBuild, [ValidatePattern('^[0-9A-Fa-f]{64}$')][string]$ExpectedGameSHA256)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = [IO.Path]::GetFullPath($PSScriptRoot)
@@ -24,6 +25,44 @@ function Assert-GameClosed {
     }
 }
 function Get-Hash { param([string]$Path) return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
+function Read-GameHeaderBytes {
+    param([IO.Stream]$Stream, [int]$Count)
+    $bytes = New-Object byte[] $Count; $offset = 0
+    while ($offset -lt $Count) {
+        $read = $Stream.Read($bytes, $offset, $Count - $offset)
+        if ($read -eq 0) { throw 'Malformed game executable: incomplete PE header.' }
+        $offset += $read
+    }
+    return ,$bytes
+}
+function Assert-GamePeHeader {
+    param([string]$Path)
+    # Check only bounded file headers. Packed game exports are not enumerated,
+    # and a renamed DLL/plain file cannot qualify for untested-build opt-in.
+    $stream = [IO.File]::Open($Path, 'Open', 'Read', 'Read')
+    try {
+        if ($stream.Length -lt 64) { throw 'Choose a valid Windows AMD64 game executable.' }
+        $dos = Read-GameHeaderBytes $stream 64
+        if ([BitConverter]::ToUInt16($dos, 0) -ne 0x5a4d) { throw 'Choose a valid Windows AMD64 game executable (missing MZ header).' }
+        $ntOffset = [long][BitConverter]::ToUInt32($dos, 60)
+        if ($ntOffset -lt 64 -or $ntOffset -gt 1048576 -or $ntOffset -gt ($stream.Length - 24)) { throw 'Malformed game executable: PE header offset is outside its bounds.' }
+        $stream.Position = $ntOffset
+        $nt = Read-GameHeaderBytes $stream 24
+        $sections = [int][BitConverter]::ToUInt16($nt, 6)
+        $optionalSize = [int][BitConverter]::ToUInt16($nt, 20)
+        $characteristics = [BitConverter]::ToUInt16($nt, 22)
+        if ([BitConverter]::ToUInt32($nt, 0) -ne 0x4550 -or [BitConverter]::ToUInt16($nt, 4) -ne 0x8664 -or
+            ($characteristics -band 2) -eq 0 -or ($characteristics -band 0x2000) -ne 0) { throw 'Choose a Windows AMD64 executable, not a DLL or another architecture.' }
+        $headerEnd = $ntOffset + 24 + $optionalSize + 40 * $sections
+        if ($sections -lt 1 -or $sections -gt 96 -or $optionalSize -lt 112 -or $optionalSize -gt 4096 -or $headerEnd -gt $stream.Length) { throw 'Malformed game executable: optional or section headers are outside their bounds.' }
+        $optional = Read-GameHeaderBytes $stream $optionalSize
+        $entry = [long][BitConverter]::ToUInt32($optional, 16)
+        $imageSize = [long][BitConverter]::ToUInt32($optional, 56)
+        $headersSize = [long][BitConverter]::ToUInt32($optional, 60)
+        if ([BitConverter]::ToUInt16($optional, 0) -ne 0x20b -or $headersSize -lt $headerEnd -or
+            $headersSize -gt $stream.Length -or $imageSize -lt $headersSize -or $entry -lt 1 -or $entry -ge $imageSize) { throw 'Malformed game executable: invalid PE32+ image headers.' }
+    } finally { $stream.Dispose() }
+}
 function Assert-OwnedTarget {
     param([string]$Path, [string]$Expected, [string]$Bin)
     $full = [IO.Path]::GetFullPath($Path)
@@ -42,7 +81,13 @@ function Write-State {
 $state = $null
 if ([IO.File]::Exists($statePath)) {
     $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
-    if ($state.SchemaVersion -ne 1 -or $state.GameSHA256 -ine $supportedGameHash) { throw 'Unsupported installation record.' }
+    if ($state.SchemaVersion -eq 1) {
+        if ($state.GameSHA256 -ine $supportedGameHash) { throw 'Unsupported legacy installation record.' }
+    } elseif ($state.SchemaVersion -eq 2) {
+        if ($state.GameSHA256 -notmatch '^[0-9A-Fa-f]{64}$' -or $state.TestedBuild -isnot [bool] -or
+            $state.UntestedBuildOptIn -isnot [bool] -or $state.TestedBuild -ne ($state.GameSHA256 -ieq $supportedGameHash) -or
+            (-not $state.TestedBuild -and -not $state.UntestedBuildOptIn)) { throw 'Unsupported or inconsistent installation record.' }
+    } else { throw 'Unsupported installation record.' }
 }
 $bin = $null
 if (-not [string]::IsNullOrWhiteSpace($GameDirectory)) { $bin = Resolve-GameBin $GameDirectory -RequireExecutable:($Action -eq 'Install') }
@@ -59,7 +104,10 @@ if ($null -ne $state -and $null -ne $bin -and $state.Status -eq 'installed' -and
 if ($Action -eq 'Status') {
     $proxyPresent = $false; $systemPresent = $false
     if ($null -ne $bin) { $proxyPresent = [IO.File]::Exists((Join-Path $bin 'dxgi.dll')); $systemPresent = [IO.File]::Exists((Join-Path $bin 'dxgi_codex_system.dll')) }
-    [pscustomobject]@{ GameDirectory = $bin; ProxyPresent = $proxyPresent; SystemCopyPresent = $systemPresent; StatePresent = $null -ne $state; RecordedStatus = $(if ($null -ne $state) { $state.Status } else { 'none' }) }
+    [pscustomobject]@{ GameDirectory = $bin; ProxyPresent = $proxyPresent; SystemCopyPresent = $systemPresent; StatePresent = $null -ne $state
+        RecordedStatus = $(if ($null -ne $state) { $state.Status } else { 'none' }); GameSHA256 = $(if ($null -ne $state) { $state.GameSHA256 } else { $null })
+        TestedBuild = $(if ($null -eq $state) { $null } elseif ($state.SchemaVersion -eq 1) { $true } else { $state.TestedBuild })
+        UntestedBuildOptIn = $(if ($null -eq $state -or $state.SchemaVersion -eq 1) { $false } else { $state.UntestedBuildOptIn }) }
     return
 }
 Assert-GameClosed
@@ -76,7 +124,11 @@ if ($Action -eq 'Uninstall') {
 }
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or -not [Environment]::Is64BitProcess) { throw 'Install with 64-bit PowerShell on Windows.' }
 $gameExe = Join-Path $bin 'Maneater-Win64-Shipping.exe'
-if ((Get-Hash $gameExe) -ine $supportedGameHash) { throw 'Unsupported game executable; nothing installed.' }
+Assert-GamePeHeader $gameExe
+$gameHash = Get-Hash $gameExe
+if ($PSBoundParameters.ContainsKey('ExpectedGameSHA256') -and $gameHash -ine $ExpectedGameSHA256) { throw 'Game executable changed since selection; nothing installed. Select it again.' }
+$testedBuild = $gameHash -ieq $supportedGameHash
+if (-not $testedBuild -and -not $AllowUntestedBuild) { throw 'This game build is untested. Explicit -AllowUntestedBuild is required to proceed; nothing installed.' }
 $dist = Join-Path $root 'dist'; $modSource = Join-Path $dist 'dxgi.dll'; $definition = Join-Path $dist 'dxgi_proxy.def'
 $manifest = Get-Content -LiteralPath (Join-Path $dist 'build.json') -Raw | ConvertFrom-Json
 if ($manifest.SchemaVersion -ne 1 -or $manifest.GameSHA256 -ine $supportedGameHash -or $manifest.TargetFPS -ne 120) { throw 'Unsupported build manifest.' }
@@ -97,13 +149,17 @@ $modTarget = Join-Path $bin 'dxgi.dll'; $systemTarget = Join-Path $bin 'dxgi_cod
 foreach ($target in @($modTarget, $systemTarget)) { if (Test-Path -LiteralPath $target) { throw "Existing file preserved: $target" } }
 $systemHash = $system.Table.FileSHA256; $modHash = [string]$manifest.ModSHA256; $copiedSystem = $false; $copiedMod = $false
 Assert-GameClosed
+$copyGameHash = Get-Hash $gameExe
+if ($copyGameHash -cne $gameHash) { throw 'Game executable changed during preparation; nothing installed. Select it again.' }
 try {
     [IO.File]::Copy($system.Path, $systemTarget, $false); $copiedSystem = $true
     [IO.File]::Copy($modSource, $modTarget, $false); $copiedMod = $true
     Assert-OwnedTarget $systemTarget $systemHash $bin; Assert-OwnedTarget $modTarget $modHash $bin
-    Write-State ([pscustomobject]@{ SchemaVersion = 1; Status = 'installed'; GameDirectory = $bin; GameSHA256 = $supportedGameHash
+    Write-State ([pscustomobject]@{ SchemaVersion = 2; Status = 'installed'; GameDirectory = $bin; GameSHA256 = $gameHash
+        TestedBuild = [bool]$testedBuild; UntestedBuildOptIn = [bool](-not $testedBuild -and $AllowUntestedBuild)
         ModSHA256 = $modHash; SystemSHA256 = $systemHash; SystemExportsSHA256 = $system.Table.ContractSHA256; InstalledUTC = [DateTime]::UtcNow.ToString('o') })
-    'Native FPS mod installed. Check maneater_codex_fps.log after loading a save.'
+    if ($testedBuild) { 'Native FPS mod installed. Check maneater_codex_fps.log after loading a save.' }
+    else { 'Native FPS mod installed for an untested build. Runtime guards may leave the hook inactive; check maneater_codex_fps.log after loading a save.' }
 } catch {
     $installationError = $_
     $rollbackErrors = @()

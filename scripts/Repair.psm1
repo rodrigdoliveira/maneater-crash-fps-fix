@@ -36,8 +36,35 @@ function Resolve-ManeaterExecutable {
         default { throw 'Choose Maneater.exe or Maneater-Win64-Shipping.exe.' }
     }
     $exe = Join-Path $bin 'Maneater-Win64-Shipping.exe'
-    if (-not [IO.File]::Exists($exe) -or (Get-RepairHash $exe) -cne $script:SupportedGameHash) { throw 'This Maneater build is unsupported. No game files or settings changed.' }
-    [pscustomobject]@{ GameRoot = $gameRoot; Bin = [IO.Path]::GetFullPath($bin); Executable = $exe; GameSHA256 = $script:SupportedGameHash }
+    if (-not [IO.File]::Exists($exe)) { throw 'Maneater shipping executable was not found.' }
+    $hash=Get-RepairHash $exe; $tested=$hash -ceq $script:SupportedGameHash
+    if(-not $tested){ Assert-ManeaterPeImage -Path $exe }
+    [pscustomobject]@{ GameRoot = $gameRoot; Bin = [IO.Path]::GetFullPath($bin); Executable = $exe; GameSHA256 = $hash; TestedBuild=$tested }
+}
+function Assert-ManeaterPeImage {
+    param([string]$Path)
+    $stream=[IO.File]::Open($Path,'Open','Read','Read')
+    try {
+        $reader=New-Object IO.BinaryReader($stream)
+        if($stream.Length -lt 64 -or $reader.ReadUInt16() -ne 0x5a4d){throw 'Selected file is not a Windows x64 Maneater executable.'}
+        $stream.Position=60; $offset=$reader.ReadInt32()
+        if($offset -lt 64 -or $offset -gt 1048576 -or $offset+264 -gt $stream.Length){throw 'Invalid executable PE header.'}
+        $stream.Position=$offset
+        if($reader.ReadUInt32() -ne 0x4550 -or $reader.ReadUInt16() -ne 0x8664){throw 'Only Windows x64 executables can be tried.'}
+        $sections=$reader.ReadUInt16();$stream.Position=$offset+20;$optionalSize=$reader.ReadUInt16();$flags=$reader.ReadUInt16()
+        if($sections -lt 1 -or $sections -gt 96 -or $optionalSize -lt 240 -or $offset+24+$optionalSize -gt $stream.Length -or ($flags-band 2)-eq 0 -or ($flags-band 0x2000)-ne 0 -or $reader.ReadUInt16()-ne 0x20b){throw 'Unsupported executable architecture or malformed PE header.'}
+        $stream.Position=$offset+24+16;$entry=$reader.ReadUInt32();$stream.Position=$offset+24+56;$imageSize=$reader.ReadUInt32()
+        if($entry-eq 0 -or $imageSize-eq 0 -or $entry-ge $imageSize){throw 'Malformed executable image bounds.'}
+    } finally { $stream.Dispose() }
+}
+function Test-RepairGameTested {
+    param($Game)
+    if($null -ne $Game.PSObject.Properties['TestedBuild']){return [bool]$Game.TestedBuild}
+    return $Game.GameSHA256 -ceq $script:SupportedGameHash
+}
+function Test-RepairAnselSkipped {
+    param($Plan)
+    return $null -ne $Plan.PSObject.Properties['AnselDisposition'] -and $Plan.AnselDisposition -eq 'SkippedUnknownSDK'
 }
 function Get-RepairBuildReady {
     try {
@@ -58,7 +85,7 @@ function Get-NativeRepairPlan {
     param($Game)
     $mod = Join-Path $Game.Bin 'dxgi.dll'; $systemCopy = Join-Path $Game.Bin 'dxgi_codex_system.dll'
     $modPresent = [IO.File]::Exists($mod); $systemPresent = [IO.File]::Exists($systemCopy)
-    $action = 'Install'; $oldModHash = $null; $oldSystemHash = $null
+    $action = 'Install'; $oldModHash = $null; $oldSystemHash = $null; $originalNativeRecord = $null
     $nativeState = Join-Path $script:Root '.local\installation.json'
     if ([IO.File]::Exists($nativeState)) {
         $existingRecord = Get-Content -LiteralPath $nativeState -Raw | ConvertFrom-Json
@@ -70,7 +97,18 @@ function Get-NativeRepairPlan {
         if ([IO.File]::Exists($nativeState)) {
             $record = Get-Content -LiteralPath $nativeState -Raw | ConvertFrom-Json
             if ($record.Status -eq 'installed' -and $record.GameDirectory -ieq $Game.Bin -and $record.ModSHA256 -ceq $oldModHash -and $record.SystemSHA256 -ceq $oldSystemHash) {
-                $action = 'None'
+                $originalNativeRecord = $record
+                $action = 'ReplaceRecognized'
+                if (Get-RepairBuildReady) {
+                    $build = Get-Content -LiteralPath (Join-Path $script:Root 'dist\build.json') -Raw | ConvertFrom-Json
+                    $system = Get-VerifiedWindowsDxgi
+                    $recordGameMatches = $null -ne $record.PSObject.Properties['GameSHA256'] -and $record.GameSHA256 -ceq $Game.GameSHA256
+                    if ($record.SchemaVersion -eq 2) {
+                        $recordGameMatches = $recordGameMatches -and $record.TestedBuild -eq (Test-RepairGameTested $Game) -and
+                            $record.UntestedBuildOptIn -eq (-not (Test-RepairGameTested $Game))
+                    }
+                    if ($oldModHash -ceq $build.ModSHA256 -and $oldSystemHash -ceq $system.Table.FileSHA256 -and $recordGameMatches) { $action = 'None' }
+                }
             } else { throw 'Native installation record does not match the files. Restore or repair that installation first.' }
         } else {
             $known = $oldModHash -ceq $script:LegacyModHash
@@ -86,7 +124,7 @@ function Get-NativeRepairPlan {
             $action = 'ReplaceRecognized'
         }
     }
-    [pscustomobject]@{ Action = $action; ModPath = $mod; SystemPath = $systemCopy; OriginalModHash = $oldModHash; OriginalSystemHash = $oldSystemHash; BackupMod = $null; BackupSystem = $null; InstalledHash = $null; InstalledSystemHash = $null }
+    [pscustomobject]@{ Action = $action; ModPath = $mod; SystemPath = $systemCopy; OriginalModHash = $oldModHash; OriginalSystemHash = $oldSystemHash; OriginalNativeRecord = $originalNativeRecord; BackupMod = $null; BackupSystem = $null; InstalledHash = $null; InstalledSystemHash = $null }
 }
 function Get-ManeaterRepairPlan {
     [CmdletBinding()]
@@ -96,12 +134,14 @@ function Get-ManeaterRepairPlan {
     Assert-SteamManeaterInstallation -Context $steam -GameRoot $game.GameRoot | Out-Null
     $steamStatus = Get-SteamFixStatus -ConfigPath $steam.ConfigPath
     $cpu = Get-ManeaterCpuPlan
-    $launch = New-ManeaterLaunchOptions -ExistingOptions $steamStatus.ExistingLaunchOptions -CpuPlan $cpu
+    $launch = New-ManeaterLaunchOptions -ExistingOptions $steamStatus.ExistingLaunchOptions -CpuPlan $cpu -AllowUntestedBuild:(-not $game.TestedBuild)
     $steamPlan = New-SteamFixPlan -ConfigPath $steam.ConfigPath -LaunchOptions $launch
     $ansel = Get-ManeaterAnselStatus -GameRoot $game.GameRoot
-    if ($ansel.Action -eq 'Refuse') { throw ('Ansel files need review before automatic repair: ' + $ansel.Status + '. Existing files were preserved.') }
+    $anselDisposition='ApplyKnownSDK'
+    if(-not $game.TestedBuild -and $ansel.Status -in @('UnrecognizedOriginal','UnrecognizedDisabled')){$anselDisposition='SkippedUnknownSDK'}
+    elseif ($ansel.Action -eq 'Refuse') { throw ('Ansel files need review before automatic repair: ' + $ansel.Status + '. Existing files were preserved.') }
     $native = Get-NativeRepairPlan $game
-    [pscustomobject]@{ SchemaVersion = 1; Game = $game; SteamContext = $steam; Steam = $steamPlan; Cpu = $cpu; LaunchOptions = $launch; Ansel = $ansel; Native = $native; BuildReady = Get-RepairBuildReady }
+    [pscustomobject]@{ SchemaVersion = 1; Game = $game; SteamContext = $steam; Steam = $steamPlan; Cpu = $cpu; LaunchOptions = $launch; Ansel = $ansel; AnselDisposition=$anselDisposition; Native = $native; BuildReady = Get-RepairBuildReady }
 }
 function Test-ManeaterRepairState {
     [CmdletBinding()]
@@ -109,17 +149,23 @@ function Test-ManeaterRepairState {
     try {
         if ($Journal.SchemaVersion -ne 1 -or $Journal.Status -ne 'applied') { throw 'No completed repair record.' }
         $game=Resolve-ManeaterExecutable $Journal.Plan.Game.Executable
-        if ($game.Bin -ine $Journal.Plan.Game.Bin) { throw 'The recorded game folder changed.' }
+        if ($game.Bin -ine $Journal.Plan.Game.Bin -or $game.GameSHA256 -cne $Journal.Plan.Game.GameSHA256) { throw 'The recorded game folder or executable changed.' }
+        if(-not $game.TestedBuild -and ($null -eq $Journal.PSObject.Properties['UntestedBuildOptIn'] -or -not $Journal.UntestedBuildOptIn)){throw 'This untested executable has no recorded opt-in.'}
         if ((Get-RepairHash (Join-Path $game.Bin 'dxgi.dll')) -cne $Journal.Plan.Native.InstalledHash -or
             (Get-RepairHash (Join-Path $game.Bin 'dxgi_codex_system.dll')) -cne $Journal.Plan.Native.InstalledSystemHash) { throw 'The native mod files changed or were removed.' }
         if ((Get-VerifiedWindowsDxgi).Table.FileSHA256 -cne $Journal.Plan.Native.InstalledSystemHash) { throw 'Windows updated its DXGI library.' }
         $context=Get-SteamFixContext -Context $Journal.Plan.SteamContext
         Assert-SteamManeaterInstallation -Context $context -GameRoot $game.GameRoot | Out-Null
         $steam=Get-SteamFixStatus -ConfigPath $context.ConfigPath
-        $desired=New-ManeaterLaunchOptions -ExistingOptions $Journal.Plan.LaunchOptions -CpuPlan (Get-ManeaterCpuPlan)
+        $desired=New-ManeaterLaunchOptions -ExistingOptions $Journal.Plan.LaunchOptions -CpuPlan (Get-ManeaterCpuPlan) -AllowUntestedBuild:(-not $game.TestedBuild)
         if ($steam.ExistingLaunchOptions -cne $desired -or $steam.ExistingOverlay -cne '0') { throw 'Steam settings or CPU topology changed.' }
-        if ([IO.File]::Exists($Journal.Plan.Ansel.OriginalPath)) { throw 'The Ansel SDK was enabled again.' }
-        if ($Journal.Plan.Ansel.Action -eq 'Disable' -and (Get-RepairHash $Journal.Plan.Ansel.DisabledPath) -cne $Journal.Plan.Ansel.ExpectedHash) { throw 'The saved Ansel SDK changed or is missing.' }
+        if(Test-RepairAnselSkipped $Journal.Plan){
+            $currentAnsel=Get-ManeaterAnselStatus -GameRoot $game.GameRoot
+            if($currentAnsel.OriginalHash -cne $Journal.Plan.Ansel.OriginalHash -or $currentAnsel.DisabledHash -cne $Journal.Plan.Ansel.DisabledHash){throw 'The preserved unrecognized Ansel files changed.'}
+        } else {
+            if ([IO.File]::Exists($Journal.Plan.Ansel.OriginalPath)) { throw 'The Ansel SDK was enabled again.' }
+            if ($Journal.Plan.Ansel.Action -eq 'Disable' -and (Get-RepairHash $Journal.Plan.Ansel.DisabledPath) -cne $Journal.Plan.Ansel.ExpectedHash) { throw 'The saved Ansel SDK changed or is missing.' }
+        }
         return [pscustomobject]@{Valid=$true;Reason='All applicable fixes are present.'}
     } catch { return [pscustomobject]@{Valid=$false;Reason=$_.Exception.Message} }
 }
@@ -150,10 +196,18 @@ function Restore-NativeRepair {
         }
     }
     $statePath = Join-Path $script:Root '.local\installation.json'
+    $originalRecord = $(if ($null -ne $native.PSObject.Properties['OriginalNativeRecord']) { $native.OriginalNativeRecord } else { $null })
+    if ($null -ne $originalRecord -and ($native.Action -ne 'ReplaceRecognized' -or $originalRecord.Status -ne 'installed' -or
+        $originalRecord.SchemaVersion -notin @(1,2) -or $originalRecord.GameDirectory -ine $bin -or
+        $originalRecord.ModSHA256 -cne $native.OriginalModHash -or $originalRecord.SystemSHA256 -cne $native.OriginalSystemHash)) { throw 'Original native installation record does not match the saved pair.' }
     $state = $null
     if ([IO.File]::Exists($statePath)) {
         $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
-        if ($state.GameDirectory -ine $bin -or $state.ModSHA256 -cne $native.InstalledHash -or $state.SystemSHA256 -cne $native.InstalledSystemHash) { throw 'Native installation record changed; preserving it and the current files.' }
+        $matchesOriginal = $null -ne $originalRecord -and
+            ($state | ConvertTo-Json -Depth 30 -Compress) -ceq ($originalRecord | ConvertTo-Json -Depth 30 -Compress)
+        $matchesNew = $state.GameDirectory -ieq $bin -and $state.ModSHA256 -ceq $native.InstalledHash -and $state.SystemSHA256 -ceq $native.InstalledSystemHash
+        if ($matchesNew -and $null -ne $state.PSObject.Properties['GameSHA256']) { $matchesNew = $state.GameSHA256 -ceq $Journal.Plan.Game.GameSHA256 }
+        if (-not $matchesOriginal -and -not $matchesNew) { throw 'Native installation record changed; preserving it and the current files.' }
     }
     # Recover a terminated install even if it stopped before the native record
     # was committed. Only the two exact hashes in the write-ahead plan qualify.
@@ -183,7 +237,9 @@ function Restore-NativeRepair {
             } else { throw 'Native backup is missing; manual recovery is required.' }
         }
     }
-    if ($null -ne $state) {
+    if ($null -ne $originalRecord) {
+        Write-RepairJson $statePath $originalRecord
+    } elseif ($null -ne $state) {
         if ($native.Action -eq 'ReplaceRecognized') { [IO.File]::Delete($statePath) }
         else { $state.Status = 'uninstalled'; Write-RepairJson $statePath $state }
     }
@@ -207,7 +263,7 @@ function Restore-ManeaterRepair {
         catch { $errors.Add($_.Exception.Message) }
     }
     & $Progress 'Restoring Ansel...'
-    try { Restore-ManeaterAnselFix -Plan $journal.Plan.Ansel | Out-Null } catch { $errors.Add($_.Exception.Message) }
+    if(-not (Test-RepairAnselSkipped $journal.Plan)){try { Restore-ManeaterAnselFix -Plan $journal.Plan.Ansel | Out-Null } catch { $errors.Add($_.Exception.Message) }}
     & $Progress 'Restoring the previous native mod files...'
     try { Restore-NativeRepair $journal } catch { $errors.Add($_.Exception.Message) }
     $journal.Status = $(if ($errors.Count) { 'recovery-required' } else { 'restored' })
@@ -219,13 +275,14 @@ function Restore-ManeaterRepair {
 }
 function Invoke-ManeaterRepair {
     [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][string]$GameExecutable, $SteamContext, [scriptblock]$Progress = {})
+    param([Parameter(Mandatory = $true)][string]$GameExecutable, $SteamContext, [switch]$AllowUntestedBuild, [ValidatePattern('^[0-9A-Fa-f]{64}$')][string]$ExpectedGameSHA256, [scriptblock]$Progress = {})
     Assert-RepairProcessesClosed
     $statePath = Get-RepairStatePath
+    $selected=Resolve-ManeaterExecutable $GameExecutable
+    if(-not [string]::IsNullOrEmpty($ExpectedGameSHA256) -and $selected.GameSHA256 -ine $ExpectedGameSHA256){throw 'Game executable changed since the warning/selection. Choose it again.'}
     if ([IO.File]::Exists($statePath)) {
         $prior = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
         if ($prior.Status -eq 'applied') {
-            $selected = Resolve-ManeaterExecutable $GameExecutable
             if ($prior.Plan.Game.Bin -ine $selected.Bin) { throw 'Restore the previous game installation before selecting another one.' }
             $current=Test-ManeaterRepairState -Journal $prior
             if (-not $current.Valid) { throw ('The setup changed: ' + $current.Reason + ' Use Restore, then apply again.') }
@@ -233,6 +290,7 @@ function Invoke-ManeaterRepair {
         }
         if ($prior.Status -ne 'restored') { throw 'An interrupted repair needs recovery. Click Restore, then apply again.' }
     }
+    if(-not $selected.TestedBuild -and -not $AllowUntestedBuild){throw 'Untested Maneater build. Enable Allow an untested build (experimental) to try it. No changes made.'}
     & $Progress 'Checking the game, Steam settings, and CPU topology...'
     $plan = Get-ManeaterRepairPlan -GameExecutable $GameExecutable -SteamContext $SteamContext
     Assert-RepairWritable $plan.Game.Bin
@@ -244,7 +302,7 @@ function Invoke-ManeaterRepair {
     }
     # All potentially slow/download operations precede game/settings changes.
     Assert-RepairProcessesClosed
-    if ((Get-RepairHash $plan.Game.Executable) -cne $script:SupportedGameHash) { throw 'Game executable changed during preparation.' }
+    if ($plan.Game.GameSHA256 -cne $selected.GameSHA256 -or (Get-RepairHash $plan.Game.Executable) -cne $plan.Game.GameSHA256) { throw 'Game executable changed during preparation.' }
     $build = Get-Content -LiteralPath (Join-Path $script:Root 'dist\build.json') -Raw | ConvertFrom-Json
     $plan.Native.InstalledHash = $(if($plan.Native.Action -eq 'None'){$plan.Native.OriginalModHash}else{$build.ModSHA256})
     $plan.Native.InstalledSystemHash = $(if($plan.Native.Action -eq 'None'){$plan.Native.OriginalSystemHash}else{(Get-VerifiedWindowsDxgi).Table.FileSHA256})
@@ -252,7 +310,8 @@ function Invoke-ManeaterRepair {
     [IO.Directory]::CreateDirectory($backup) | Out-Null
     $plan.Native.BackupMod = Join-Path $backup 'previous-dxgi.dll'
     $plan.Native.BackupSystem = Join-Path $backup 'previous-system-dxgi.dll'
-    $journal = [pscustomobject]@{ SchemaVersion=1; Status='applying'; Plan=$plan; BackupDirectory=$backup; SteamRecord=$null; Errors=@(); Warnings=@(); StartedUTC=[DateTime]::UtcNow.ToString('o') }
+    $warnings=@();if(-not $plan.Game.TestedBuild){$warnings+='Untested game build: native FPS activation depends on runtime compatibility checks.'};if(Test-RepairAnselSkipped $plan){$warnings+='Unrecognized Ansel SDK preserved; Ansel change skipped.'}
+    $journal = [pscustomobject]@{ SchemaVersion=1; Status='applying'; Plan=$plan; UntestedBuildOptIn=(-not $plan.Game.TestedBuild -and [bool]$AllowUntestedBuild); BackupDirectory=$backup; SteamRecord=$null; Errors=@(); Warnings=$warnings; StartedUTC=[DateTime]::UtcNow.ToString('o') }
     Write-RepairJson $statePath $journal
     try {
         & $Progress 'Installing the native FPS correction...'
@@ -267,9 +326,9 @@ function Invoke-ManeaterRepair {
                 [IO.File]::Delete($entry.Target)
             }
         }
-        if ($plan.Native.Action -ne 'None') { & (Join-Path $script:Root 'Manage-Mod.ps1') -Action Install -GameDirectory $plan.Game.Bin | Out-Null }
+        if ($plan.Native.Action -ne 'None') { & (Join-Path $script:Root 'Manage-Mod.ps1') -Action Install -GameDirectory $plan.Game.Bin -AllowUntestedBuild:([bool]$AllowUntestedBuild) -ExpectedGameSHA256 $plan.Game.GameSHA256 | Out-Null }
         & $Progress 'Applying the Ansel stability setting...'
-        Apply-ManeaterAnselFix -Plan $plan.Ansel | Out-Null
+        if(-not (Test-RepairAnselSkipped $plan)){Apply-ManeaterAnselFix -Plan $plan.Ansel | Out-Null}
         & $Progress 'Applying OpenSSL, CPU scheduling, and per-game overlay settings...'
         $journal.SteamRecord = Invoke-SteamFixPlan -Plan $plan.Steam -BackupDirectory $backup
         Write-RepairJson $statePath $journal
@@ -278,7 +337,7 @@ function Invoke-ManeaterRepair {
         $verification=Test-ManeaterRepairState -Journal $journal
         if(-not $verification.Valid){throw ('Final verification failed: '+$verification.Reason)}
         Write-RepairJson $statePath $journal
-        & $Progress 'All applicable fixes are applied. Click Play to start Maneater.'
+        & $Progress $(if($plan.Game.TestedBuild){'Fixes installed. Click Play to start Maneater.'}else{'Experimental setup installed. FPS compatibility is checked when Maneater starts.'})
         return $journal
     } catch {
         $failure = $_.Exception.Message

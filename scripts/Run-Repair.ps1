@@ -14,7 +14,11 @@ try {
     catch { throw 'Another repair operation is running. Wait for it to finish, then retry.' }
     switch ($request.Action) {
         'Plan' { & $progress 'Checking the selected game...'; $result = Get-ManeaterRepairPlan -GameExecutable $request.GameExecutable -SteamContext $request.SteamContext }
-        'Apply' { $result = Invoke-ManeaterRepair -GameExecutable $request.GameExecutable -SteamContext $request.SteamContext -Progress $progress }
+        'Apply' {
+            $allow=$null -ne $request.PSObject.Properties['AllowUntestedBuild'] -and $request.AllowUntestedBuild -is [bool] -and $request.AllowUntestedBuild
+            if($null -eq $request.PSObject.Properties['ExpectedGameSHA256']){throw 'Apply requires the executable hash from the reviewed selection.'}
+            $result = Invoke-ManeaterRepair -GameExecutable $request.GameExecutable -SteamContext $request.SteamContext -AllowUntestedBuild:$allow -ExpectedGameSHA256 $request.ExpectedGameSHA256 -Progress $progress
+        }
         'Restore' { $result = Restore-ManeaterRepair -Progress $progress }
         'Verify' {
             $journal=Get-Content -LiteralPath (Get-RepairStatePath) -Raw | ConvertFrom-Json

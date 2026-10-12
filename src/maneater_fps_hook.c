@@ -17,7 +17,8 @@
 /* This DLL changes no executable bytes and makes no CVar calls from its worker.
  * It forwards one object's existing Set call, changing 60 to 120 only for the
  * verified engine SetMaxFPS callsite. Other requests retain their original ABI.
- * Runtime guards supplement the installer's exact executable SHA256 check.
+ * Strict metadata is the default. An explicit game-process environment flag
+ * may waive only metadata equality; every fixed-RVA code/object guard remains.
  */
 #define EXPECTED_TIMESTAMP 0x61ae6d91UL
 #define EXPECTED_IMAGE_SIZE 0x1e1c8000UL
@@ -40,6 +41,8 @@ typedef void (__fastcall *ConsoleSetFn)(void *, const wchar_t *, uint32_t);
 
 static HMODULE g_self;
 static uintptr_t g_game_base;
+static DWORD g_game_image_size;
+static int g_experimental_build;
 static void *g_target_object;
 static ConsoleSetFn g_original_set;
 /* One preceding entry is preserved verbatim, including the RTTI locator if one
@@ -74,6 +77,79 @@ static const unsigned char k_getfloat_prefix[] = {
 static const wchar_t k_expected_help[] = L"Caps FPS to the given value.  Set to <= 0 to be uncapped.";
 static const wchar_t k_replacement[] = L"120";
 
+static int allow_untested_build(void) {
+    wchar_t value[3] = {0, 0, 0};
+    DWORD length = GetEnvironmentVariableW(L"MANEATER_FIX_ALLOW_UNTESTED", value, 3);
+    return length == 1 && value[0] == L'1' && value[1] == L'\0';
+}
+
+static int host_name_matches(const wchar_t *path, SIZE_T length) {
+    static const wchar_t expected[] = L"maneater-win64-shipping.exe";
+    SIZE_T start = 0, i;
+    if (!path || length == 0) return 0;
+    for (i = 0; i < length; ++i) if (path[i] == L'\\' || path[i] == L'/') start = i + 1;
+    if (length - start != sizeof(expected) / sizeof(expected[0]) - 1U) return 0;
+    for (i = 0; i < length - start; ++i) {
+        wchar_t c = path[start + i];
+        if (c >= L'A' && c <= L'Z') c += L'a' - L'A';
+        if (c != expected[i]) return 0;
+    }
+    return 1;
+}
+
+static int rva_in_bounds(DWORD image_size, uintptr_t rva, SIZE_T size) {
+    return size != 0 && rva < (uintptr_t)image_size &&
+        size <= (SIZE_T)((uintptr_t)image_size - rva);
+}
+
+static int fixed_layout_fits(DWORD image_size) {
+    return rva_in_bounds(image_size, CVAR_OBJECT_POINTER_RVA, sizeof(void *)) &&
+        rva_in_bounds(image_size, CVAR_DATA_POINTER_RVA, sizeof(void *)) &&
+        rva_in_bounds(image_size, CVAR_VTABLE_RVA - sizeof(void *),
+                      (SHADOW_SLOT_COUNT + 1U) * sizeof(void *)) &&
+        rva_in_bounds(image_size, ENGINE_SET_RVA, sizeof(k_engine_set_prefix)) &&
+        rva_in_bounds(image_size, ENGINE_SET_CALL_RVA, sizeof(k_engine_set_call)) &&
+        rva_in_bounds(image_size, ENGINE_SET_RETURN_RVA, 1) &&
+        rva_in_bounds(image_size, CVAR_SET_RVA, sizeof(k_console_set_prefix)) &&
+        rva_in_bounds(image_size, CVAR_GETFLAGS_RVA, sizeof(k_getflags)) &&
+        rva_in_bounds(image_size, CVAR_GETDATA_RVA, sizeof(k_getdata)) &&
+        rva_in_bounds(image_size, CVAR_GETFLOAT_RVA, sizeof(k_getfloat_prefix));
+}
+
+/* Pure metadata gate, also exercised without creating a game object. */
+static int compatible_header(const IMAGE_NT_HEADERS64 *nt, SIZE_T header_end,
+                             int allow_untested, int *experimental) {
+    int exact;
+    if (!nt || !experimental) return 0;
+    *experimental = 0;
+    if (nt->Signature != IMAGE_NT_SIGNATURE || nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 ||
+        nt->FileHeader.SizeOfOptionalHeader < sizeof(IMAGE_OPTIONAL_HEADER64) ||
+        nt->FileHeader.NumberOfSections == 0 ||
+        nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
+        nt->OptionalHeader.SizeOfHeaders == 0 ||
+        nt->OptionalHeader.SizeOfHeaders > nt->OptionalHeader.SizeOfImage ||
+        header_end > nt->OptionalHeader.SizeOfHeaders ||
+        (SIZE_T)(nt->FileHeader.SizeOfOptionalHeader - sizeof(IMAGE_OPTIONAL_HEADER64)) +
+            (SIZE_T)nt->FileHeader.NumberOfSections * sizeof(IMAGE_SECTION_HEADER) >
+            nt->OptionalHeader.SizeOfHeaders - header_end ||
+        nt->OptionalHeader.AddressOfEntryPoint == 0 ||
+        nt->OptionalHeader.AddressOfEntryPoint >= nt->OptionalHeader.SizeOfImage ||
+        !fixed_layout_fits(nt->OptionalHeader.SizeOfImage)) return 0;
+    exact = nt->FileHeader.TimeDateStamp == EXPECTED_TIMESTAMP &&
+        nt->OptionalHeader.SizeOfImage == EXPECTED_IMAGE_SIZE &&
+        nt->OptionalHeader.AddressOfEntryPoint == EXPECTED_ENTRYPOINT;
+    if (!exact && !allow_untested) return 0;
+    *experimental = !exact;
+    return 1;
+}
+
+static int byte_signature_matches(const unsigned char *actual, const unsigned char *expected, SIZE_T size) {
+    SIZE_T i;
+    if (!actual || !expected || size == 0 || size > 64U) return 0;
+    for (i = 0; i < size; ++i) if (actual[i] != expected[i]) return 0;
+    return 1;
+}
+
 static int readable_range(const void *address, SIZE_T size) {
     uintptr_t at = (uintptr_t)address;
     uintptr_t end;
@@ -102,6 +178,38 @@ static int safe_read(const void *address, void *buffer, SIZE_T size) {
     return ReadProcessMemory(GetCurrentProcess(), address, buffer, size, &copied) && copied == size;
 }
 
+/* Fixed offsets must belong to the main mapped image, not merely to readable
+ * memory nearby. Heap CVar storage has its separate existing object guards.
+ */
+static int image_range(uintptr_t rva, SIZE_T size, int executable) {
+    uintptr_t at, end;
+    if (!g_game_base || !rva_in_bounds(g_game_image_size, rva, size) ||
+        rva > UINTPTR_MAX - g_game_base) return 0;
+    at = g_game_base + rva;
+    if (size > UINTPTR_MAX - at) return 0;
+    end = at + size;
+    while (at < end) {
+        MEMORY_BASIC_INFORMATION info;
+        uintptr_t region_end;
+        DWORD protection;
+        if (!VirtualQuery((const void *)at, &info, sizeof(info)) || info.State != MEM_COMMIT ||
+            info.Type != MEM_IMAGE || (uintptr_t)info.AllocationBase != g_game_base ||
+            (info.Protect & (PAGE_GUARD | PAGE_NOACCESS))) return 0;
+        protection = info.Protect & 0xffU;
+        if (executable && protection != PAGE_EXECUTE_READ && protection != PAGE_EXECUTE_READWRITE &&
+            protection != PAGE_EXECUTE_WRITECOPY) return 0;
+        if (!readable_range((const void *)at, 1)) return 0;
+        region_end = (uintptr_t)info.BaseAddress + info.RegionSize;
+        if (region_end <= at) return 0;
+        at = region_end < end ? region_end : end;
+    }
+    return 1;
+}
+
+static int read_image(uintptr_t rva, void *buffer, SIZE_T size) {
+    return image_range(rva, size, 0) && safe_read((const void *)(g_game_base + rva), buffer, size);
+}
+
 static int writable_vptr(const void *object) {
     MEMORY_BASIC_INFORMATION info;
     DWORD protection;
@@ -116,10 +224,9 @@ static int writable_vptr(const void *object) {
 
 static int signature_matches(uintptr_t rva, const unsigned char *expected, SIZE_T size) {
     unsigned char actual[64];
-    SIZE_T i;
-    if (size > sizeof(actual) || !safe_read((const void *)(g_game_base + rva), actual, size)) return 0;
-    for (i = 0; i < size; ++i) if (actual[i] != expected[i]) return 0;
-    return 1;
+    if (size > sizeof(actual) || !image_range(rva, size, 1) ||
+        !safe_read((const void *)(g_game_base + rva), actual, size)) return 0;
+    return byte_signature_matches(actual, expected, size);
 }
 
 static void open_log(void) {
@@ -149,15 +256,26 @@ static void log_line(const char *line) {
 static int validate_build(void) {
     IMAGE_DOS_HEADER dos;
     IMAGE_NT_HEADERS64 nt;
+    wchar_t host_path[32768];
+    DWORD host_length;
+    uintptr_t nt_rva;
+    MEMORY_BASIC_INFORMATION main_info;
     g_game_base = (uintptr_t)GetModuleHandleW(NULL);
+    g_game_image_size = 0;
+    g_experimental_build = 0;
+    host_length = GetModuleFileNameW(NULL, host_path, (DWORD)(sizeof(host_path) / sizeof(host_path[0])));
+    if (host_length == 0 || host_length >= sizeof(host_path) / sizeof(host_path[0]) ||
+        !host_name_matches(host_path, host_length)) return 0;
+    if (!g_game_base || !VirtualQuery((const void *)g_game_base, &main_info, sizeof(main_info)) ||
+        main_info.Type != MEM_IMAGE || (uintptr_t)main_info.AllocationBase != g_game_base) return 0;
     if (!g_game_base || !safe_read((const void *)g_game_base, &dos, sizeof(dos))) return 0;
     if (dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew < 0 || dos.e_lfanew > 0x100000) return 0;
-    if (!safe_read((const void *)(g_game_base + (uintptr_t)dos.e_lfanew), &nt, sizeof(nt))) return 0;
-    if (nt.Signature != IMAGE_NT_SIGNATURE || nt.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 ||
-        nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
-        nt.FileHeader.TimeDateStamp != EXPECTED_TIMESTAMP ||
-        nt.OptionalHeader.SizeOfImage != EXPECTED_IMAGE_SIZE ||
-        nt.OptionalHeader.AddressOfEntryPoint != EXPECTED_ENTRYPOINT) return 0;
+    nt_rva = (uintptr_t)dos.e_lfanew;
+    if (nt_rva > UINTPTR_MAX - g_game_base ||
+        !safe_read((const void *)(g_game_base + nt_rva), &nt, sizeof(nt)) ||
+        !compatible_header(&nt, nt_rva + sizeof(nt), allow_untested_build(), &g_experimental_build)) return 0;
+    g_game_image_size = nt.OptionalHeader.SizeOfImage;
+    if (!image_range(0, sizeof(dos), 0) || !image_range(nt_rva, sizeof(nt), 0)) return 0;
     return signature_matches(ENGINE_SET_RVA, k_engine_set_prefix, sizeof(k_engine_set_prefix)) &&
         signature_matches(ENGINE_SET_CALL_RVA, k_engine_set_call, sizeof(k_engine_set_call)) &&
         signature_matches(CVAR_SET_RVA, k_console_set_prefix, sizeof(k_console_set_prefix)) &&
@@ -229,11 +347,16 @@ static int validate_object(void *object, void ***vtable_out, float values[2], ui
     if (!safe_read(object, fields, sizeof(fields))) return -1;
     memcpy(&vtable, fields, sizeof(vtable));
     if ((uintptr_t)vtable != g_game_base + CVAR_VTABLE_RVA || !writable_vptr(object)) return -1;
-    if (!safe_read(vtable, slots, sizeof(slots)) || !readable_range(vtable - 1, sizeof(void *))) return -1;
+    if (!image_range(CVAR_VTABLE_RVA - sizeof(void *), (SHADOW_SLOT_COUNT + 1U) * sizeof(void *), 0) ||
+        !read_image(CVAR_VTABLE_RVA, slots, sizeof(slots))) return -1;
     if ((uintptr_t)slots[3] != g_game_base + CVAR_GETFLAGS_RVA ||
         (uintptr_t)slots[12] != g_game_base + CVAR_GETDATA_RVA ||
         (uintptr_t)slots[16] != g_game_base + CVAR_SET_RVA ||
         (uintptr_t)slots[19] != g_game_base + CVAR_GETFLOAT_RVA) return -1;
+    if (!image_range(CVAR_GETFLAGS_RVA, sizeof(k_getflags), 1) ||
+        !image_range(CVAR_GETDATA_RVA, sizeof(k_getdata), 1) ||
+        !image_range(CVAR_SET_RVA, sizeof(k_console_set_prefix), 1) ||
+        !image_range(CVAR_GETFLOAT_RVA, sizeof(k_getfloat_prefix), 1)) return -1;
     memcpy(&help_pointer, fields + 8, sizeof(help_pointer));
     memcpy(&help_count, fields + 16, sizeof(help_count));
     memcpy(&help_capacity, fields + 20, sizeof(help_capacity));
@@ -242,7 +365,7 @@ static int validate_object(void *object, void ***vtable_out, float values[2], ui
     for (i = 0; i < expected_count; ++i) if (help[i] != k_expected_help[i]) return -1;
     memcpy(&flags, fields + 24, sizeof(flags));
     if ((flags & 0x00ffffffU) != 0 || (flags & 0xff000000U) > 0x0a000000U) return -1;
-    if (!safe_read((const void *)(g_game_base + CVAR_DATA_POINTER_RVA), &data_pointer, sizeof(data_pointer))) return -1;
+    if (!read_image(CVAR_DATA_POINTER_RVA, &data_pointer, sizeof(data_pointer))) return -1;
     if (!data_pointer) return 0;
     if ((uintptr_t)data_pointer != (uintptr_t)object + 0x38U) return -1;
     memcpy(values, fields + 56, sizeof(float) * 2);
@@ -262,14 +385,17 @@ static DWORD WINAPI install_worker(void *unused) {
     char line[256];
     (void)unused;
     open_log();
-    log_line("Maneater Codex FPS hook v0.1: requested native 60 -> 120; menu0 and other settings forwarded.");
+    log_line("Maneater Codex FPS hook v0.2: requested native 60 -> 120; menu0 and other settings forwarded.");
     if (!validate_build()) {
         log_line("PASS-THROUGH: runtime build/signature guard rejected this executable; no object changed.");
         goto done;
     }
+    if (g_experimental_build) {
+        log_line("EXPERIMENTAL: explicit process opt-in allowed different PE metadata; exact fixed-RVA signatures matched. CVar identity/layout guards remain mandatory.");
+    }
     started = GetTickCount64();
     do {
-        if (!safe_read((const void *)(g_game_base + CVAR_OBJECT_POINTER_RVA), &object, sizeof(object))) {
+        if (!read_image(CVAR_OBJECT_POINTER_RVA, &object, sizeof(object))) {
             log_line("PASS-THROUGH: registered object pointer could not be read.");
             goto done;
         }
@@ -284,14 +410,17 @@ static DWORD WINAPI install_worker(void *unused) {
     }
     g_shadow_allocation = (void **)VirtualAlloc(NULL, (SHADOW_SLOT_COUNT + 1U) * sizeof(void *),
                                                MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    if (!g_shadow_allocation || !safe_read(original_vtable - 1, g_shadow_allocation,
-                                         (SHADOW_SLOT_COUNT + 1U) * sizeof(void *))) {
+    if (!g_shadow_allocation || !read_image(CVAR_VTABLE_RVA - sizeof(void *), g_shadow_allocation,
+                                           (SHADOW_SLOT_COUNT + 1U) * sizeof(void *)) ||
+        (uintptr_t)g_shadow_allocation[3U + 1U] != g_game_base + CVAR_GETFLAGS_RVA ||
+        (uintptr_t)g_shadow_allocation[12U + 1U] != g_game_base + CVAR_GETDATA_RVA ||
+        (uintptr_t)g_shadow_allocation[SET_SLOT + 1U] != g_game_base + CVAR_SET_RVA ||
+        (uintptr_t)g_shadow_allocation[19U + 1U] != g_game_base + CVAR_GETFLOAT_RVA) {
         log_line("PASS-THROUGH: shadow vtable could not be allocated or copied.");
         goto done;
     }
-    g_game_base = (uintptr_t)GetModuleHandleW(NULL);
     g_target_object = object;
-    g_original_set = (ConsoleSetFn)original_vtable[SET_SLOT];
+    g_original_set = (ConsoleSetFn)g_shadow_allocation[SET_SLOT + 1U];
     g_shadow_allocation[SET_SLOT + 1U] = (void *)&hooked_set;
     /* Pin before publishing a pointer into this DLL; no unloading or freeing
      * shadow memory can invalidate a live object. Process exit reclaims both.
@@ -320,7 +449,7 @@ static DWORD WINAPI install_worker(void *unused) {
             log_line("REDIRECTED: verified native call requested60; forwarded120 with its original flags/callback.");
             for (i = 0; i < g_first_stack_count; ++i) {
                 uintptr_t address = (uintptr_t)g_first_stack[i];
-                if (address >= g_game_base && address - g_game_base < EXPECTED_IMAGE_SIZE) {
+                if (address >= g_game_base && address - g_game_base < g_game_image_size) {
                     snprintf(line, sizeof(line), "first redirect game frame%u: RVA0x%llx", (unsigned)i,
                              (unsigned long long)(address - g_game_base));
                     log_line(line);

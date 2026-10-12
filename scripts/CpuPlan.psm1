@@ -200,6 +200,7 @@ function Get-KnownGameArguments {
             throw 'Existing wrapper is not a recognized process-scoped OpenSSL workaround; preserve it for manual review.'
         }
         $launch = $Matches.launch; $knownWrapper = $true
+        if($launch -match '^(?i:set)\s+"(?i:MANEATER_FIX_ALLOW_UNTESTED)=(?<optin>[01])"\s*&&\s*(?<game>.+)$'){$launch=$Matches.game}
         if ($launch -match '^(?i:start)\s+') {
             $tokens = @(Get-LaunchTokenSpans $launch); $commandIndex = -1; $titleCount = 0; $seenWait = $false; $seenB = $false; $seenAffinity = $false
             for ($index = 1; $index -lt $tokens.Count; ++$index) {
@@ -234,7 +235,7 @@ function Get-KnownGameArguments {
 function New-GameLaunchPlan {
     [CmdletBinding()]
     param([string]$ExistingOptions = '', [Parameter(Mandatory = $true)]$CpuPlan, [string]$ExePath,
-          [bool]$EnableOpenSsl = $true, [bool]$IncludeCpuPlan = $true)
+          [bool]$EnableOpenSsl = $true, [bool]$IncludeCpuPlan = $true, [switch]$AllowUntestedBuild)
     $parsed = Get-KnownGameArguments $ExistingOptions
     $arguments = $parsed.Arguments; $cpuApplied = $IncludeCpuPlan -and [bool]$CpuPlan.Apply; $hasCoreLimit = $false
     if ($cpuApplied) {
@@ -251,6 +252,8 @@ function New-GameLaunchPlan {
         if (-not $hasCoreLimit) { $arguments = (($arguments + ' -corelimit=' + $CpuPlan.CoreLimit).Trim()) }
     }
     $prefix = if ($EnableOpenSsl) { 'set "OPENSSL_ia32cap=:~0x20000000" && ' } else { '' }
+    $experimental=$(if($AllowUntestedBuild){'1'}else{'0'})
+    $prefix += 'set "MANEATER_FIX_ALLOW_UNTESTED=' + $experimental + '" && '
     $start = 'start "" /b /wait'
     if ($cpuApplied) { $start += ' /affinity ' + $CpuPlan.AffinityMaskHex.ToUpperInvariant() }
     $tail = if ($arguments.Length -ne 0) { ' ' + $arguments } else { '' }
@@ -265,12 +268,12 @@ function New-GameLaunchPlan {
     }
     return [pscustomobject]@{ SteamLaunchOptions = $steam; CmdArguments = $direct; CpuApplied = $cpuApplied
         GameArguments = $arguments; PreservedExistingArguments = $parsed.Arguments; RecognizedExistingWrapper = $parsed.KnownWrapper
-        RegeneratedManagedCpu = $parsed.RegeneratedManagedCpu; EnvironmentOverrides = $(if ($EnableOpenSsl) { @{ OPENSSL_ia32cap = ':~0x20000000' } } else { @{} })
+        RegeneratedManagedCpu = $parsed.RegeneratedManagedCpu; UntestedBuildOptIn=[bool]$AllowUntestedBuild; EnvironmentOverrides = $(if ($EnableOpenSsl) { @{ OPENSSL_ia32cap = ':~0x20000000'; MANEATER_FIX_ALLOW_UNTESTED=$experimental } } else { @{MANEATER_FIX_ALLOW_UNTESTED=$experimental} })
         Description = 'Changes are scoped to this launched process; no system environment or CPU settings are changed.' }
 }
 function New-ManeaterLaunchOptions {
     [CmdletBinding()]
-    param([string]$ExistingOptions = '', [Parameter(Mandatory = $true)]$CpuPlan)
-    return (New-GameLaunchPlan -ExistingOptions $ExistingOptions -CpuPlan $CpuPlan).SteamLaunchOptions
+    param([string]$ExistingOptions = '', [Parameter(Mandatory = $true)]$CpuPlan, [switch]$AllowUntestedBuild)
+    return (New-GameLaunchPlan -ExistingOptions $ExistingOptions -CpuPlan $CpuPlan -AllowUntestedBuild:$AllowUntestedBuild).SteamLaunchOptions
 }
 Export-ModuleMember -Function ConvertFrom-CpuSetBuffer, Get-WindowsCpuTopology, Get-CpuLaunchPlan, Get-ManeaterCpuPlan, New-GameLaunchPlan, New-ManeaterLaunchOptions

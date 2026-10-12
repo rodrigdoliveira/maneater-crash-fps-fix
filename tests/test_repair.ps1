@@ -12,6 +12,12 @@ $script:passed=0
 function Assert-Test([bool]$Condition,[string]$Message){if(-not $Condition){throw "FAIL: $Message"};$script:passed++}
 function Assert-Throws([scriptblock]$Operation,[string]$Message){$caught=$false;try{& $Operation|Out-Null}catch{$caught=$true};Assert-Test $caught $Message}
 function Hash([string]$Path){(Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash}
+function New-GameBytes {
+    $bytes=New-Object byte[] 1024
+    foreach($pair in @(@(0,0x5a4d),@(0x84,0x8664),@(0x86,1),@(0x94,240),@(0x96,0x22),@(0x98,0x20b))){[Array]::Copy([BitConverter]::GetBytes([uint16]$pair[1]),0,$bytes,[int]$pair[0],2)}
+    foreach($pair in @(@(60,0x80),@(0x80,0x4550),@(0xa8,0x1000),@(0xd0,0x2000),@(0xd4,0x200))){[Array]::Copy([BitConverter]::GetBytes([uint32]$pair[1]),0,$bytes,[int]$pair[0],4)}
+    return ,$bytes
+}
 function New-Scenario([string]$Name){
     $repo=Join-Path $testRoot $Name
     [IO.Directory]::CreateDirectory((Join-Path $repo 'scripts'))|Out-Null
@@ -22,7 +28,7 @@ function New-Scenario([string]$Name){
     $game=Join-Path $fixture 'g';$bin=Join-Path $game 'Maneater\Binaries\Win64'
     $ansel=Join-Path $game 'Engine\Plugins\Runtime\Nvidia\Ansel\Binaries\ThirdParty\AnselSDK64.dll'
     foreach($directory in @($bin,[IO.Path]::GetDirectoryName($ansel),(Join-Path $repo 'dist'),(Join-Path $repo '.local'))){[IO.Directory]::CreateDirectory($directory)|Out-Null}
-    $exe=Join-Path $bin 'Maneater-Win64-Shipping.exe';[IO.File]::WriteAllText($exe,'fixture game; not executable')
+    $exe=Join-Path $bin 'Maneater-Win64-Shipping.exe';[IO.File]::WriteAllBytes($exe,(New-GameBytes))
     [IO.File]::WriteAllText($ansel,'fixture Ansel; not DLL')
     # Substitute the expected SDK bytes only in this isolated module COPY.
     # Never change the public module or permit a real-game test override.
@@ -38,16 +44,22 @@ function New-Scenario([string]$Name){
     $manifest=[pscustomobject]@{GameSHA256=(Hash $exe);TargetFPS=120;ModSHA256=(Hash $mod)}
     [IO.File]::WriteAllText((Join-Path $repo 'dist\build.json'),($manifest|ConvertTo-Json))
     $installer=@'
-param([string]$Action,[string]$GameDirectory)
+param([string]$Action,[string]$GameDirectory,[switch]$AllowUntestedBuild,[string]$ExpectedGameSHA256)
 $ErrorActionPreference='Stop'
 $root=$PSScriptRoot;$state=Join-Path $root '.local\installation.json'
 if($Action -ne 'Install'){throw 'Composite restore must handle owned fixture files directly.'}
+$gameHash=(Get-FileHash (Join-Path $GameDirectory 'Maneater-Win64-Shipping.exe')).Hash
+if($ExpectedGameSHA256 -and $gameHash -cne $ExpectedGameSHA256){throw 'Selected fixture game changed.'}
+$template=Get-Content -LiteralPath (Join-Path $root 'dist\build.json') -Raw|ConvertFrom-Json
+$tested=$gameHash -ceq $template.GameSHA256
+if(-not $tested -and -not $AllowUntestedBuild){throw 'Fixture unknown build needs opt-in.'}
 [IO.File]::Copy((Join-Path $root 'dist\fixture-system.dll'),(Join-Path $GameDirectory 'dxgi_codex_system.dll'),$false)
 [IO.File]::Copy((Join-Path $root 'dist\dxgi.dll'),(Join-Path $GameDirectory 'dxgi.dll'),$false)
 $mode=Join-Path $root '.local\fail-native'
 if([IO.File]::Exists($mode)){throw 'Injected failure after native copies before installation record.'}
-$record=[pscustomobject]@{SchemaVersion=1;Status='installed';GameDirectory=$GameDirectory;ModSHA256=(Get-FileHash (Join-Path $GameDirectory 'dxgi.dll')).Hash;SystemSHA256=(Get-FileHash (Join-Path $GameDirectory 'dxgi_codex_system.dll')).Hash}
+$record=[pscustomobject]@{SchemaVersion=2;Status='installed';GameDirectory=$GameDirectory;GameSHA256=$gameHash;TestedBuild=$tested;UntestedBuildOptIn=(-not $tested -and [bool]$AllowUntestedBuild);ModSHA256=(Get-FileHash (Join-Path $GameDirectory 'dxgi.dll')).Hash;SystemSHA256=(Get-FileHash (Join-Path $GameDirectory 'dxgi_codex_system.dll')).Hash}
 [IO.File]::WriteAllText($state,($record|ConvertTo-Json))
+if([IO.File]::Exists((Join-Path $root '.local\fail-native-after-state'))){throw 'Injected failure after native state write before return.'}
 '@
     [IO.File]::WriteAllText((Join-Path $repo 'Manage-Mod.ps1'),$installer)
     $module=Import-Module (Join-Path $repo 'scripts\Repair.psm1') -Force -PassThru -DisableNameChecking
@@ -59,7 +71,7 @@ $record=[pscustomobject]@{SchemaVersion=1;Status='installed';GameDirectory=$Game
         function script:Get-SteamFixContext {param($Context) $script:FixtureContext}
         function script:Assert-SteamManeaterInstallation {param($Context,$GameRoot) if($Context.ConfigPath -cne $script:FixtureContext.ConfigPath){throw 'Wrong fixture Steam context.'}}
         function script:Get-ManeaterCpuPlan {[pscustomobject]@{Apply=$false;Description='fixture CPU; no topology probe'}}
-        function script:New-ManeaterLaunchOptions {param($ExistingOptions,$CpuPlan) 'cmd /c "set "OPENSSL_ia32cap=:~0x20000000" && %command%"'}
+        function script:New-ManeaterLaunchOptions {param($ExistingOptions,$CpuPlan,[switch]$AllowUntestedBuild) 'cmd /c "set "OPENSSL_ia32cap=:~0x20000000" && set "MANEATER_FIX_ALLOW_UNTESTED='+$(if($AllowUntestedBuild){'1'}else{'0'})+'" && %command%"'}
         function script:Get-RepairBuildReady {$true}
         function script:Get-RepairCompiler {throw 'Fixture must not download or run a compiler.'}
         function script:Get-VerifiedWindowsDxgi {[pscustomobject]@{Table=[pscustomobject]@{FileSHA256=$script:FixtureSystemHash}}}
@@ -73,11 +85,23 @@ $record=[pscustomobject]@{SchemaVersion=1;Status='installed';GameDirectory=$Game
     & $steamModule {function script:Assert-SteamFixClosed {}; function script:Get-SteamFixRunningProcesses {@()}}
     [pscustomobject]@{Root=$repo;Module=$module;Game=$game;Bin=$bin;Exe=$exe;Ansel=$ansel;Config=$config;OriginalConfig=[IO.File]::ReadAllBytes($config);Context=$context;Mod=$mod;System=$system}
 }
-function Invoke-Case($Case){& $Case.Module {param($Exe,$Context) Invoke-ManeaterRepair -GameExecutable $Exe -SteamContext $Context} $Case.Exe $Case.Context}
+function Invoke-Case($Case,[switch]$AllowUntestedBuild,[string]$ExpectedGameSHA256,[scriptblock]$Progress={}){& $Case.Module {param($Exe,$Context,$Allow,$Expected,$Progress) $params=@{GameExecutable=$Exe;SteamContext=$Context;AllowUntestedBuild=$Allow;Progress=$Progress};if($Expected){$params.ExpectedGameSHA256=$Expected};Invoke-ManeaterRepair @params} $Case.Exe $Case.Context ([bool]$AllowUntestedBuild) $ExpectedGameSHA256 $Progress}
 function Restore-Case($Case){& $Case.Module {Restore-ManeaterRepair}}
 function Read-Journal($Case){Get-Content -LiteralPath (Join-Path $Case.Root '.local\repair.json') -Raw|ConvertFrom-Json}
 function Same-Config($Case){[Convert]::ToBase64String([IO.File]::ReadAllBytes($Case.Config)) -ceq [Convert]::ToBase64String($Case.OriginalConfig)}
 function Test-CaseState($Case,$Journal){& $Case.Module {param($Journal) Test-ManeaterRepairState -Journal $Journal} $Journal}
+function Set-OldNative($Case,[switch]$SameHashes){
+    $mod=Join-Path $Case.Bin 'dxgi.dll';$system=Join-Path $Case.Bin 'dxgi_codex_system.dll'
+    if($SameHashes){[IO.File]::Copy($Case.Mod,$mod,$false)}else{[IO.File]::WriteAllText($mod,'fixture owned previous proxy')}
+    [IO.File]::Copy($Case.System,$system,$false)
+    $record=[pscustomobject]@{SchemaVersion=2;Status='installed';GameDirectory=$Case.Bin;GameSHA256=(Hash $Case.Exe);TestedBuild=$true;UntestedBuildOptIn=$false;ModSHA256=(Hash $mod);SystemSHA256=(Hash $system);PreviousMetadata='must survive upgrade and rollback'}
+    [IO.File]::WriteAllText((Join-Path $Case.Root '.local\installation.json'),($record|ConvertTo-Json))
+    return $record
+}
+function Same-NativeRecord($Case,$Expected){
+    $current=Get-Content -LiteralPath (Join-Path $Case.Root '.local\installation.json') -Raw|ConvertFrom-Json
+    return ($current|ConvertTo-Json -Depth 30 -Compress) -ceq ($Expected|ConvertTo-Json -Depth 30 -Compress)
+}
 function Manual-Journal($Case,[string]$Action){
     $plan=& $Case.Module {param($Exe,$Context) Get-ManeaterRepairPlan -GameExecutable $Exe -SteamContext $Context} $Case.Exe $Case.Context
     $plan.Native.Action=$Action;$plan.Native.InstalledHash=Hash $Case.Mod;$plan.Native.InstalledSystemHash=Hash $Case.System
@@ -93,7 +117,7 @@ try{
     Assert-Test (-not [IO.File]::Exists($case.Ansel) -and [IO.File]::Exists($journal.Plan.Ansel.DisabledPath)) 'real Ansel backend applied'
     Assert-Test (-not (Same-Config $case)) 'real Steam backend changed fixture settings'
     Assert-Test ([IO.File]::Exists((Join-Path $case.Bin 'dxgi.dll'))) 'fixture native installer applied'
-    Assert-Test ((Invoke-Case $case).StartedUTC -ceq $journal.StartedUTC) 'reapply preserves transaction'
+    Assert-Test ([DateTimeOffset](Invoke-Case $case).StartedUTC -eq [DateTimeOffset]$journal.StartedUTC) 'reapply preserves transaction'
     Restore-Case $case|Out-Null
     Assert-Test ((Read-Journal $case).Status -eq 'restored' -and (Same-Config $case)) 'composite restore restores exact Steam bytes'
     Assert-Test ([IO.File]::Exists($case.Ansel) -and -not [IO.File]::Exists((Join-Path $case.Bin 'dxgi.dll'))) 'composite restore handles SDK and owned native files'
@@ -186,6 +210,62 @@ try{
     & $case.Module {param($Journal) Write-RepairJson -Path (Get-RepairStatePath) -Value $Journal} $journal
     Assert-Throws {Restore-Case $case} 'tampered native restore target refused'
     Assert-Test ([IO.File]::Exists($outside) -and [IO.File]::Exists((Join-Path $case.Bin 'dxgi.dll'))) 'restore path refusal preserves matching unrelated file and installed proxy'
+
+    $case=New-Scenario 'owned-current';$oldRecord=Set-OldNative $case -SameHashes
+    $plan=& $case.Module {param($Exe,$Context) Get-ManeaterRepairPlan -GameExecutable $Exe -SteamContext $Context} $case.Exe $case.Context
+    Assert-Test ($plan.Native.Action -eq 'None' -and $plan.Native.OriginalNativeRecord.PreviousMetadata -ceq $oldRecord.PreviousMetadata) 'current owned pair preserved with captured record'
+    & $case.Module {function script:Get-RepairBuildReady {$false}}
+    $plan=& $case.Module {param($Exe,$Context) Get-ManeaterRepairPlan -GameExecutable $Exe -SteamContext $Context} $case.Exe $case.Context
+    Assert-Test ($plan.Native.Action -eq 'ReplaceRecognized') 'stale source/build readiness forces owned pair refresh'
+    & $case.Module {function script:Get-RepairBuildReady {$true}}
+    $journal=Manual-Journal $case 'ReplaceRecognized'
+    Restore-Case $case|Out-Null
+    Assert-Test ((Same-NativeRecord $case $oldRecord) -and (Hash (Join-Path $case.Bin 'dxgi.dll')) -ceq $oldRecord.ModSHA256) 'identical owned old/new pair and prior record survive restore before backups'
+
+    $case=New-Scenario 'owned-upgrade';$oldRecord=Set-OldNative $case;$journal=Invoke-Case $case
+    Assert-Test ($journal.Plan.Native.Action -eq 'ReplaceRecognized' -and $journal.Plan.Native.OriginalNativeRecord.PreviousMetadata -ceq $oldRecord.PreviousMetadata) 'different desired DLL plans owned upgrade with original native record'
+    Assert-Test ((Hash (Join-Path $case.Bin 'dxgi.dll')) -ceq (Hash $case.Mod)) 'owned upgrade installs refreshed proxy'
+    Restore-Case $case|Out-Null
+    Assert-Test ((Same-NativeRecord $case $oldRecord) -and (Hash (Join-Path $case.Bin 'dxgi.dll')) -ceq $oldRecord.ModSHA256 -and (Hash (Join-Path $case.Bin 'dxgi_codex_system.dll')) -ceq $oldRecord.SystemSHA256) 'owned upgrade restores exact old pair and all prior record metadata'
+
+    $case=New-Scenario 'owned-before-backup';$oldRecord=Set-OldNative $case
+    Assert-Throws {Invoke-Case $case -Progress {param($message) if($message -ceq 'Installing the native FPS correction...'){throw 'Injected before owned backup.'}}} 'owned upgrade pre-backup interruption reported'
+    Assert-Test ((Read-Journal $case).Status -eq 'restored' -and (Same-NativeRecord $case $oldRecord) -and (Hash (Join-Path $case.Bin 'dxgi.dll')) -ceq $oldRecord.ModSHA256) 'preexisting old native state accepted without backups or mutations'
+
+    foreach($phase in @('fail-native','fail-native-after-state')){
+        $case=New-Scenario ('owned-'+$phase);$oldRecord=Set-OldNative $case
+        [IO.File]::WriteAllText((Join-Path $case.Root ('.local\'+$phase)),'inject')
+        Assert-Throws {Invoke-Case $case} "$phase owned upgrade interruption reported"
+        Assert-Test ((Read-Journal $case).Status -eq 'restored' -and (Same-NativeRecord $case $oldRecord) -and (Hash (Join-Path $case.Bin 'dxgi.dll')) -ceq $oldRecord.ModSHA256 -and (Hash (Join-Path $case.Bin 'dxgi_codex_system.dll')) -ceq $oldRecord.SystemSHA256) "$phase restores prior owned pair/record before native return"
+    }
+
+    $case=New-Scenario 'untested-default'
+    $unknown=[IO.File]::ReadAllBytes($case.Exe);$unknown[1023]=1;[IO.File]::WriteAllBytes($case.Exe,$unknown)
+    $resolved=& $case.Module {param($Exe) Resolve-ManeaterExecutable $Exe} $case.Exe
+    Assert-Test (-not $resolved.TestedBuild -and $resolved.GameSHA256 -ceq (Hash $case.Exe)) 'unknown AMD64 PE resolves with its actual hash for warning'
+    Assert-Throws {Invoke-Case $case} 'untested repair requires opt-in before mutations'
+    Assert-Test (-not [IO.File]::Exists((Join-Path $case.Root '.local\repair.json')) -and (Same-Config $case) -and [IO.File]::Exists($case.Ansel) -and -not [IO.File]::Exists((Join-Path $case.Bin 'dxgi.dll'))) 'default unknown rejection writes no journal/settings/game files'
+
+    $case=New-Scenario 'untested-selection-race';$selectedHash=Hash $case.Exe
+    $unknown=[IO.File]::ReadAllBytes($case.Exe);$unknown[1023]=2;[IO.File]::WriteAllBytes($case.Exe,$unknown)
+    Assert-Throws {Invoke-Case $case -AllowUntestedBuild -ExpectedGameSHA256 $selectedHash} 'changed warning/selection hash rejects even opted-in repair'
+    Assert-Test (-not [IO.File]::Exists((Join-Path $case.Root '.local\repair.json')) -and (Same-Config $case)) 'selection race makes no configuration transaction'
+
+    $case=New-Scenario 'untested-sdk-preserved'
+    $unknown=[IO.File]::ReadAllBytes($case.Exe);$unknown[1023]=3;[IO.File]::WriteAllBytes($case.Exe,$unknown)
+    [IO.File]::WriteAllText($case.Ansel,'different unrecognized SDK; never a DLL');$sdkHash=Hash $case.Ansel
+    $actualHash=Hash $case.Exe;$journal=Invoke-Case $case -AllowUntestedBuild -ExpectedGameSHA256 $actualHash
+    Assert-Test ($journal.Status -ceq 'applied' -and $journal.UntestedBuildOptIn -and -not $journal.Plan.Game.TestedBuild -and $journal.Plan.Game.GameSHA256 -ceq $actualHash) 'opted-in repair journal records actual untested hash'
+    $nativeRecord=Get-Content -LiteralPath (Join-Path $case.Root '.local\installation.json') -Raw|ConvertFrom-Json
+    Assert-Test ($nativeRecord.GameSHA256 -ceq $actualHash -and -not $nativeRecord.TestedBuild -and $nativeRecord.UntestedBuildOptIn) 'native installer boundary receives opt-in and selected hash'
+    Assert-Test ($journal.Plan.AnselDisposition -ceq 'SkippedUnknownSDK' -and (Hash $case.Ansel) -ceq $sdkHash -and -not [IO.File]::Exists($journal.Plan.Ansel.DisabledPath)) 'untested unknown SDK is preserved and explicitly skipped'
+    Assert-Test ((Test-CaseState $case $journal).Valid -and $journal.Plan.LaunchOptions -match 'MANEATER_FIX_ALLOW_UNTESTED=1') 'current same-hash opted-in setup verifies with scoped experimental flag'
+    $journal.UntestedBuildOptIn=$false
+    Assert-Test (-not (Test-CaseState $case $journal).Valid) 'unknown applied state without opt-in is invalid'
+    $journal.UntestedBuildOptIn=$true;$unknown[1023]=4;[IO.File]::WriteAllBytes($case.Exe,$unknown)
+    Assert-Test (-not (Test-CaseState $case $journal).Valid) 'unknown applied state with changed executable is invalid'
+    Restore-Case $case|Out-Null
+    Assert-Test ((Read-Journal $case).Status -ceq 'restored' -and (Hash $case.Ansel) -ceq $sdkHash -and (Same-Config $case) -and -not [IO.File]::Exists((Join-Path $case.Bin 'dxgi.dll'))) 'untested restore leaves skipped SDK unchanged and removes only owned modifications'
 
     Write-Output "PASS: $script:passed composite repair contracts; isolated fake installation only."
 }finally{

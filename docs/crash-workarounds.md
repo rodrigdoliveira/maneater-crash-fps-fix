@@ -8,6 +8,14 @@ Short tests and a longer play session were crash-free with the combined setup. T
 
 The [README compatibility section](../README.md#compatibility) identifies the executable used for the investigation. Recheck compatibility after a game update. Keep a record of existing launch options and file names before trying a step; compare the same gameplay conditions and restore a change if it causes problems.
 
+## Experimental use with another Steam build
+
+The launcher can preview an untested Windows x64 executable, but refuses to apply fixes to it by default. Version 0.3.0 offers **Allow an untested build (experimental)** and a separate warning that must be accepted for each apply operation. This is limited to the selected installation belonging to Steam's Maneater app 629820; it does not extend support to another storefront or to a copied executable. The private repair journal records the actual game hash.
+
+The option does not establish that the complete bundle works on that build. It can relax native version-metadata checks while preserving exact code signatures, image bounds, object layout and caller checks. Installed FPS-mod files can leave the game unchanged when the native hook declines. Check `maneater_codex_fps.log` for the current launch, without reusing an older launch's entries: an installation message or native `INSTALLED` entry is not a verified FPS redirect. `REDIRECTED` confirms the matching 60-to-120 request; `PASS-THROUGH` indicates that the native guard declined. Neither a redirect nor a crash-free session establishes that every retained workaround is effective.
+
+The guidance below describes the tested setup. Treat CPU-worker behavior and the other game-specific assumptions as unverified on a different build. Existing file-ownership safeguards still apply; an unrecognized Ansel SDK is preserved and its step is skipped with a warning. Restore the recorded previous setup if the experiment causes problems, and include the executable hash and opt-in status in a sanitized report.
+
 ## 1. Scoped OpenSSL startup workaround
 
 For launch failures or a black screen, [Maneater's official support article](https://support.maneatergame.com/en/knowledgebase/article/cant-launch-game-black-screen) recommends an OpenSSL capability override in Steam Launch Options. [Intel explains the older OpenSSL SHA-extension bug](https://www.intel.com/content/www/us/en/developer/articles/troubleshooting/openssl-sha-crash-bug-requires-application-update.html): this mask selects a code path that avoids the affected SHA-extension implementation. It is not a general fix for every gameplay crash.
@@ -63,4 +71,4 @@ To undo the experiment, close the game and restore the prior launch options, rem
 
 ## What remains unproven
 
-The native DLL's verified behavior is the specific 60-to-120 FPS correction. The combined setup's crash-free sessions do not prove that the DLL, Ansel exclusion, overlay setting or CPU configuration independently fixed a crash. Long loading and gameplay hitches remained in measurements. Report real exceptions separately from normal quits, menus and Alt-Tab transitions, and share only sanitized reproduction details in public issues.
+Gameplay verification used the earlier native FPS v0.1 core for the specific 60-to-120 FPS correction on the tested build. Native v0.2's additional experimental-build and mapped-image guards were checked by contract fixtures and source review; the updated DLL has not had a new gameplay test. An experimental opt-in does not add validation for another build. The combined setup's crash-free sessions do not prove that the DLL, Ansel exclusion, overlay setting or CPU configuration independently fixed a crash. Long loading and gameplay hitches remained in measurements. Report real exceptions separately from normal quits, menus and Alt-Tab transitions, and share only sanitized reproduction details in public issues.

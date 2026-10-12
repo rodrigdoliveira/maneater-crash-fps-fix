@@ -49,6 +49,19 @@ function New-FixturePe {
     [IO.File]::WriteAllBytes($Path, $bytes)
     return $bytes
 }
+function New-FixtureGamePe {
+    # A bounded AMD64 PE32+ executable header; this file is never executed.
+    $bytes = New-Object byte[] 1024
+    Put-U16 $bytes 0 0x5a4d; Put-U32 $bytes 60 0x80; Put-U32 $bytes 0x80 0x4550
+    Put-U16 $bytes 0x84 0x8664; Put-U16 $bytes 0x86 1; Put-U16 $bytes 0x94 240; Put-U16 $bytes 0x96 0x22
+    $optional = 0x98; Put-U16 $bytes $optional 0x20b; Put-U32 $bytes ($optional + 16) 0x1000
+    Put-U32 $bytes ($optional + 56) 0x2000; Put-U32 $bytes ($optional + 60) 0x200; Put-U32 $bytes ($optional + 108) 16
+    $section = $optional + 240
+    Put-U32 $bytes ($section + 8) 0x200; Put-U32 $bytes ($section + 12) 0x1000
+    Put-U32 $bytes ($section + 16) 0x200; Put-U32 $bytes ($section + 20) 0x200; Put-U32 $bytes ($section + 36) 0x60000020
+    $bytes[0x200] = 0xc3
+    return ,$bytes
+}
 function Update-FixtureManifest {
     param([string]$Fixture, [string]$GameHash, $System)
     $proxy = Get-PeExportTable -Path (Join-Path $Fixture 'dist\dxgi.dll')
@@ -90,7 +103,7 @@ try {
         Assert-Throws { Get-PeExportTable $bad } "$mutation corruption refused"
     }
     $coreHash = (Get-FileHash -LiteralPath (Join-Path $root 'src\maneater_fps_hook.c') -Algorithm SHA256).Hash
-    Assert-Test ($coreHash -ceq 'A8322468BE231A1961933328E9D06640E4F34CCDE73D2651C1B70C8040DEDB71') 'tested core source is byte-identical'
+    Assert-Test ($coreHash -ceq '27B875BD1890549C1AB28B554BE42CE584EA6658C354784402A45F75CC8BD5D9') 'intentional native v0.2 source matches the independently reviewed revision'
     Assert-Throws { & (Join-Path $root 'Manage-Mod.ps1') -Action Install } 'Install requires explicit game path'
     $status = & (Join-Path $root 'Manage-Mod.ps1') -Action Status
     Assert-Test ($status.PSObject.Properties.Name -contains 'StatePresent') 'Status is read-only without game path'
@@ -103,15 +116,19 @@ try {
     foreach ($directory in @('src', 'scripts', 'dist', 'game\Maneater\Binaries\Win64')) { [IO.Directory]::CreateDirectory((Join-Path $fixture $directory)) | Out-Null }
     foreach ($relative in @('src/maneater_fps_hook.c', 'scripts/PeExports.psm1', 'build.ps1')) { [IO.File]::Copy((Join-Path $root $relative), (Join-Path $fixture $relative), $false) }
     $bin = Join-Path $fixture 'game\Maneater\Binaries\Win64'; $game = Join-Path $bin 'Maneater-Win64-Shipping.exe'
-    [IO.File]::WriteAllText($game, 'Synthetic installer fixture; never executed.')
+    $gameBytes = New-FixtureGamePe
+    [IO.File]::WriteAllBytes($game, $gameBytes)
     $gameHash = (Get-FileHash -LiteralPath $game -Algorithm SHA256).Hash
     $managerText = [IO.File]::ReadAllText((Join-Path $root 'Manage-Mod.ps1')).Replace('CC34E43BBD1F757E3883ADAF37D643C1A0FB2963967CA33AF7CB6CB8F54480C0', $gameHash)
     $manager = Join-Path $fixture 'Manage-Mod.ps1'; [IO.File]::WriteAllText($manager, $managerText, [Text.UTF8Encoding]::new($false))
     New-FixturePe $system.Table.Exports (Join-Path $fixture 'dist\dxgi.dll') | Out-Null
     New-DxgiForwarderDefinition $system.Table.Exports (Join-Path $fixture 'dist\dxgi_proxy.def')
     Update-FixtureManifest $fixture $gameHash $system
-    & $manager -Action Install -GameDirectory (Join-Path $fixture 'game') | Out-Null
+    & $manager -Action Install -GameDirectory (Join-Path $fixture 'game') -ExpectedGameSHA256 $gameHash | Out-Null
     Assert-Test ([IO.File]::Exists((Join-Path $bin 'dxgi.dll')) -and [IO.File]::Exists((Join-Path $bin 'dxgi_codex_system.dll'))) 'fixture installation copies both validated files'
+    $nativeStatePath = Join-Path $fixture '.local\installation.json'
+    $nativeState = Get-Content -LiteralPath $nativeStatePath -Raw | ConvertFrom-Json
+    Assert-Test ($nativeState.SchemaVersion -eq 2 -and $nativeState.GameSHA256 -ceq $gameHash -and $nativeState.TestedBuild -and -not $nativeState.UntestedBuildOptIn) 'tested installation records actual hash and explicit build classification'
     Assert-Throws { & $manager -Action Install -GameDirectory $bin } 'existing loader refused without overwrite'
     [IO.File]::WriteAllText((Join-Path $bin 'dxgi.dll'), 'Foreign replacement')
     Assert-Throws { & $manager -Action Uninstall } 'modified target preserved on uninstall'
@@ -120,9 +137,54 @@ try {
     & $manager -Action Uninstall | Out-Null
     Assert-Test (-not [IO.File]::Exists((Join-Path $bin 'dxgi.dll')) -and -not [IO.File]::Exists((Join-Path $bin 'dxgi_codex_system.dll'))) 'uninstall removes only owned fixture copies'
     & $manager -Action Uninstall | Out-Null; Assert-Test $true 'repeated uninstall is harmless'
-    [IO.File]::WriteAllText($game, 'Changed unsupported game')
-    Assert-Throws { & $manager -Action Install -GameDirectory $bin } 'unsupported game rejected before copies'
-    [IO.File]::WriteAllText($game, 'Synthetic installer fixture; never executed.')
+    $unknownGame = [byte[]]$gameBytes.Clone(); $unknownGame[1023] = 1
+    [IO.File]::WriteAllBytes($game, $unknownGame)
+    $unknownHash = (Get-FileHash -LiteralPath $game -Algorithm SHA256).Hash
+    Assert-Throws { & $manager -Action Install -GameDirectory $bin } 'untested build requires explicit opt-in by default'
+    Assert-Throws { & $manager -Action Install -GameDirectory $bin -AllowUntestedBuild -ExpectedGameSHA256 $gameHash } 'selected game hash mismatch rejected even with untested opt-in'
+    Assert-Test (-not [IO.File]::Exists((Join-Path $bin 'dxgi.dll')) -and -not [IO.File]::Exists((Join-Path $bin 'dxgi_codex_system.dll'))) 'untested rejection and hash mismatch make no copies'
+    & $manager -Action Install -GameDirectory $bin -AllowUntestedBuild -ExpectedGameSHA256 $unknownHash | Out-Null
+    $nativeState = Get-Content -LiteralPath $nativeStatePath -Raw | ConvertFrom-Json
+    Assert-Test ($nativeState.SchemaVersion -eq 2 -and $nativeState.GameSHA256 -ceq $unknownHash -and -not $nativeState.TestedBuild -and $nativeState.UntestedBuildOptIn) 'opted-in installation records actual untested game hash'
+    $unknownStatus = & $manager -Action Status
+    Assert-Test ($unknownStatus.GameSHA256 -ceq $unknownHash -and -not $unknownStatus.TestedBuild -and $unknownStatus.UntestedBuildOptIn) 'untested status does not require repeated opt-in'
+    [IO.File]::Delete($game)
+    & $manager -Action Uninstall | Out-Null
+    Assert-Test (-not [IO.File]::Exists((Join-Path $bin 'dxgi.dll')) -and -not [IO.File]::Exists((Join-Path $bin 'dxgi_codex_system.dll'))) 'untested uninstall needs only owned DLL hashes, even after game removal'
+    [IO.File]::WriteAllBytes($game, $gameBytes)
+    & $manager -Action Install -GameDirectory $bin | Out-Null
+    $legacy = Get-Content -LiteralPath $nativeStatePath -Raw | ConvertFrom-Json
+    $legacy.SchemaVersion = 1; $legacy.PSObject.Properties.Remove('TestedBuild'); $legacy.PSObject.Properties.Remove('UntestedBuildOptIn')
+    [IO.File]::WriteAllText($nativeStatePath, ($legacy | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+    $legacyStatus = & $manager -Action Status
+    Assert-Test ($legacyStatus.TestedBuild -and -not $legacyStatus.UntestedBuildOptIn) 'legacy schema1 tested record remains readable'
+    & $manager -Action Uninstall | Out-Null
+    Assert-Test (-not [IO.File]::Exists((Join-Path $bin 'dxgi.dll'))) 'legacy schema1 owned installation still uninstalls'
+    foreach ($corruption in @('MZ','NTOffset','Machine','OptionalMagic','OptionalSize','Sections','HeaderSize','Entry','DLL')) {
+        $badGame = [byte[]]$gameBytes.Clone()
+        switch ($corruption) {
+            'MZ' { Put-U16 $badGame 0 0 }
+            'NTOffset' { Put-U32 $badGame 60 ([uint32]::MaxValue) }
+            'Machine' { Put-U16 $badGame 0x84 0x14c }
+            'OptionalMagic' { Put-U16 $badGame 0x98 0x10b }
+            'OptionalSize' { Put-U16 $badGame 0x94 1 }
+            'Sections' { Put-U16 $badGame 0x86 0 }
+            'HeaderSize' { Put-U32 $badGame (0x98 + 60) 0x120 }
+            'Entry' { Put-U32 $badGame (0x98 + 16) 0x2000 }
+            'DLL' { Put-U16 $badGame 0x96 0x2022 }
+        }
+        [IO.File]::WriteAllBytes($game, $badGame)
+        Assert-Throws { & $manager -Action Install -GameDirectory $bin -AllowUntestedBuild } "$corruption game header refused despite opt-in"
+    }
+    [IO.File]::WriteAllText($game, 'Not a PE executable.')
+    Assert-Throws { & $manager -Action Install -GameDirectory $bin -AllowUntestedBuild } 'arbitrary non-PE file refused despite opt-in'
+    Assert-Test (-not [IO.File]::Exists((Join-Path $bin 'dxgi.dll'))) 'malformed opted-in game headers never install a proxy'
+    [IO.File]::WriteAllBytes($game, $gameBytes)
+    $changedGame = $managerText.Replace('$copyGameHash = Get-Hash $gameExe', "`$changed = [IO.File]::ReadAllBytes(`$gameExe); `$changed[1023] = 2; [IO.File]::WriteAllBytes(`$gameExe, `$changed)`n`$copyGameHash = Get-Hash `$gameExe")
+    [IO.File]::WriteAllText($manager, $changedGame, [Text.UTF8Encoding]::new($false)); Update-FixtureManifest $fixture $gameHash $system
+    Assert-Throws { & $manager -Action Install -GameDirectory $bin -ExpectedGameSHA256 $gameHash } 'game replacement during preparation rejected before copies'
+    Assert-Test (-not [IO.File]::Exists((Join-Path $bin 'dxgi.dll')) -and -not [IO.File]::Exists((Join-Path $bin 'dxgi_codex_system.dll'))) 'game race leaves both loader destinations absent'
+    [IO.File]::WriteAllBytes($game, $gameBytes)
     $failedState = $managerText.Replace('    Write-State ([pscustomobject]@{', "    throw 'Synthetic state-write failure'`n    Write-State ([pscustomobject]@{")
     [IO.File]::WriteAllText($manager, $failedState, [Text.UTF8Encoding]::new($false)); Update-FixtureManifest $fixture $gameHash $system
     Assert-Throws { & $manager -Action Install -GameDirectory $bin } 'state-write failure propagated'
