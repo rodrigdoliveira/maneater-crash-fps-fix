@@ -1,6 +1,6 @@
 # Contributing to Maneater Crash & FPS Fix
 
-Contributions should make the FPS correction easier to verify, build and maintain. Additional game builds and performance changes need evidence; keep current graphics and gameplay behavior intact.
+Contributions should make the complete repair launcher and FPS correction easier to verify, use and maintain. Additional game builds and performance changes need evidence; keep current graphics and gameplay behavior intact.
 
 Use [GitHub issues](https://github.com/rodrigdoliveira/maneater-crash-fps-fix/issues) for reports and proposed changes.
 
@@ -10,7 +10,7 @@ Include the following in an issue:
 
 - Game storefront, build number and executable SHA-256.
 - Windows version and the mod revision or source commit used.
-- Build or installation command, with personal paths removed.
+- Launcher action and error, or development command, with personal paths removed.
 - Steps to reproduce, expected behavior and actual behavior.
 - Whether the guarded hook attached and redirected the request. A short, sanitized log excerpt is enough.
 
@@ -36,4 +36,4 @@ Performance claims need comparable scenes, loading/cache conditions and measurem
 
 Submit original material or identify its source and compatible license. Contributions to this project's original code and documentation are distributed under its [MIT license](LICENSE). Keep any required third-party notices when introducing a dependency.
 
-The repository is source-only. Optimizations beyond the verified cap correction remain proposals until their support, reversibility and measured benefit are established.
+The repository is source-only; the launcher builds automatically. Changes beyond the retained repair bundle require support, reversibility and evidence of benefit.
