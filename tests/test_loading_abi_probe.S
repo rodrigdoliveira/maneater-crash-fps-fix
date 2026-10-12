@@ -1,0 +1,106 @@
+/* Synthetic caller: seed and capture every Windows x64 nonvolatile GPR/XMM.
+ * Only the authored C replacement and its typed mock execute. */
+.text
+.globl loading_abi_probe
+.def loading_abi_probe; .scl 2; .type 32; .endef
+loading_abi_probe:
+    pushq %rbx
+    pushq %rbp
+    pushq %rsi
+    pushq %rdi
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
+    subq $0xe8,%rsp
+    movq %rdx,0x30(%rsp)
+    movq %rcx,0x38(%rsp)
+    movdqu %xmm6,0x40(%rsp)
+    movdqu %xmm7,0x50(%rsp)
+    movdqu %xmm8,0x60(%rsp)
+    movdqu %xmm9,0x70(%rsp)
+    movdqu %xmm10,0x80(%rsp)
+    movdqu %xmm11,0x90(%rsp)
+    movdqu %xmm12,0xa0(%rsp)
+    movdqu %xmm13,0xb0(%rsp)
+    movdqu %xmm14,0xc0(%rsp)
+    movdqu %xmm15,0xd0(%rsp)
+    movabsq $0x1011223344556677,%rbx
+    movabsq $0x2022334455667788,%rbp
+    movabsq $0x3033445566778899,%rsi
+    movabsq $0x40445566778899aa,%rdi
+    movabsq $0x505566778899aabb,%r12
+    movabsq $0x6066778899aabbcc,%r13
+    movabsq $0x70778899aabbccdd,%r14
+    movabsq $0x808899aabbccddee,%r15
+    movdqu loading_xmm_values+0(%rip),%xmm6
+    movdqu loading_xmm_values+16(%rip),%xmm7
+    movdqu loading_xmm_values+32(%rip),%xmm8
+    movdqu loading_xmm_values+48(%rip),%xmm9
+    movdqu loading_xmm_values+64(%rip),%xmm10
+    movdqu loading_xmm_values+80(%rip),%xmm11
+    movdqu loading_xmm_values+96(%rip),%xmm12
+    movdqu loading_xmm_values+112(%rip),%xmm13
+    movdqu loading_xmm_values+128(%rip),%xmm14
+    movdqu loading_xmm_values+144(%rip),%xmm15
+    movq 0x30(%rsp),%r10
+    movq 0(%r10),%rcx
+    movq 8(%r10),%rdx
+    movl 16(%r10),%r8d
+    movq 24(%r10),%r9
+    movq 32(%r10),%r11
+    movq %r11,0x20(%rsp)
+    call *0x38(%rsp)
+    movq 0x30(%rsp),%r10
+    movq %rax,40(%r10)
+    movq %rbx,48(%r10)
+    movq %rbp,56(%r10)
+    movq %rsi,64(%r10)
+    movq %rdi,72(%r10)
+    movq %r12,80(%r10)
+    movq %r13,88(%r10)
+    movq %r14,96(%r10)
+    movq %r15,104(%r10)
+    movdqu %xmm6,112(%r10)
+    movdqu %xmm7,128(%r10)
+    movdqu %xmm8,144(%r10)
+    movdqu %xmm9,160(%r10)
+    movdqu %xmm10,176(%r10)
+    movdqu %xmm11,192(%r10)
+    movdqu %xmm12,208(%r10)
+    movdqu %xmm13,224(%r10)
+    movdqu %xmm14,240(%r10)
+    movdqu %xmm15,256(%r10)
+    movdqu 0x40(%rsp),%xmm6
+    movdqu 0x50(%rsp),%xmm7
+    movdqu 0x60(%rsp),%xmm8
+    movdqu 0x70(%rsp),%xmm9
+    movdqu 0x80(%rsp),%xmm10
+    movdqu 0x90(%rsp),%xmm11
+    movdqu 0xa0(%rsp),%xmm12
+    movdqu 0xb0(%rsp),%xmm13
+    movdqu 0xc0(%rsp),%xmm14
+    movdqu 0xd0(%rsp),%xmm15
+    addq $0xe8,%rsp
+    popq %r15
+    popq %r14
+    popq %r13
+    popq %r12
+    popq %rdi
+    popq %rsi
+    popq %rbp
+    popq %rbx
+    ret
+.section .rdata,"dr"
+.p2align 4
+loading_xmm_values:
+    .quad 0x1122334455667700,0x8877665544332200
+    .quad 0x1122334455667701,0x8877665544332201
+    .quad 0x1122334455667702,0x8877665544332202
+    .quad 0x1122334455667703,0x8877665544332203
+    .quad 0x1122334455667704,0x8877665544332204
+    .quad 0x1122334455667705,0x8877665544332205
+    .quad 0x1122334455667706,0x8877665544332206
+    .quad 0x1122334455667707,0x8877665544332207
+    .quad 0x1122334455667708,0x8877665544332208
+    .quad 0x1122334455667709,0x8877665544332209

@@ -16,10 +16,7 @@ function Save-Manifest($Manifest){[IO.File]::WriteAllText((Join-Path $fixture 'd
 function Package-Fixture {& (Join-Path $fixture 'Package-Release.ps1')}
 try{
     [IO.Directory]::CreateDirectory($fixture)|Out-Null
-    $sources=@('.gitattributes','.gitignore','README.md','LICENSE','CONTRIBUTING.md','Start.cmd','Launcher.ps1','Manage-Mod.ps1','build.ps1','Package-Release.ps1',
-        'docs/crash-workarounds.md','src/maneater_fps_hook.c','scripts/AnselFix.psm1','scripts/Compiler.psm1','scripts/CpuPlan.psm1','scripts/PeExports.psm1',
-        'scripts/Repair.psm1','scripts/Run-Repair.ps1','scripts/SteamFix.psm1','tests/Run-All.ps1','tests/native_fps_contract_fixture.c',
-        'tests/test_ansel.ps1','tests/test_compiler.ps1','tests/test_cpu_plan.ps1','tests/test_launcher.ps1','tests/test_repair.ps1','tests/test_release.ps1','tests/test_scripts.ps1','tests/test_steam.ps1')
+    $sources=@((Get-Content -LiteralPath (Join-Path $root 'release-files.json') -Raw | ConvertFrom-Json).SourceFiles)
     foreach($relative in $sources){$target=Join-Path $fixture $relative;[IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($target))|Out-Null;[IO.File]::Copy((Join-Path $root $relative),$target,$false)}
     Fixture-Git -Arguments @('init','--quiet')|Out-Null
     Fixture-Git -Arguments @('config','user.name','Release fixture')|Out-Null
@@ -31,13 +28,14 @@ try{
     # Materialize committed text attributes before creating build provenance.
     Fixture-Git -Arguments @('checkout-index','--all','--force')|Out-Null
     $dist=Join-Path $fixture 'dist';[IO.Directory]::CreateDirectory($dist)|Out-Null
-    foreach($name in @('dxgi.dll','dxgi_proxy.def')){[IO.File]::Copy((Join-Path $root ('dist\'+$name)),(Join-Path $dist $name),$false)}
+    foreach($name in @('dxgi.dll','ManeaterAreaHelper.exe','dxgi_proxy.def')){[IO.File]::Copy((Join-Path $root ('dist\'+$name)),(Join-Path $dist $name),$false)}
     $manifest=Get-Content -LiteralPath (Join-Path $root 'dist\build.json') -Raw|ConvertFrom-Json
     $hashes=[ordered]@{}
-    foreach($relative in @('src/maneater_fps_hook.c','scripts/PeExports.psm1','build.ps1','Manage-Mod.ps1')){$hashes[$relative]=Hash (Join-Path $fixture $relative)}
+    foreach($relative in @($sources | Where-Object {$_ -match '^(src|vendor)/'})+@('scripts/PeExports.psm1','build.ps1','Manage-Mod.ps1')){$hashes[$relative]=Hash (Join-Path $fixture $relative)}
     $manifest.SourceHashes=[pscustomobject]$hashes;Save-Manifest $manifest
     $manifestBytes=[IO.File]::ReadAllBytes((Join-Path $dist 'build.json'))
     $proxyBytes=[IO.File]::ReadAllBytes((Join-Path $dist 'dxgi.dll'))
+    $helperBytes=[IO.File]::ReadAllBytes((Join-Path $dist 'ManeaterAreaHelper.exe'))
     $definitionBytes=[IO.File]::ReadAllBytes((Join-Path $dist 'dxgi_proxy.def'))
     foreach($relative in @('dist/cache/private.log','.local/tools/zig.exe','.local/private-state.json','dist/dxgi_codex_system.dll','dist/native_fps_contract_fixture.exe')){
         $path=Join-Path $fixture $relative;[IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($path))|Out-Null;[IO.File]::WriteAllText($path,'excluded fixture marker')
@@ -45,11 +43,11 @@ try{
     $release=Package-Fixture
     Assert-Test ([IO.File]::Exists($release.ZipPath) -and $release.SHA256 -ceq (Hash $release.ZipPath)) 'ready ZIP returned with verified output hash'
     Assert-Test ($release.SourceCommit -ceq [string](Fixture-Git -Arguments @('rev-parse','HEAD')) -and $release.SourceTree -ceq [string](Fixture-Git -Arguments @('rev-parse','HEAD^{tree}'))) 'release reports pinned source commit/tree'
-    Assert-Test ($release.SourceFileCount -eq $sources.Count -and $release.NativeArtifactCount -eq 3 -and $release.NativeExports -eq 20) 'release has source plus exactly three native artifacts'
+    Assert-Test ($release.SourceFileCount -eq $sources.Count -and $release.NativeArtifactCount -eq 4 -and $release.NativeExports -eq 20) 'release has source plus exactly four native artifacts'
     $zip=[IO.Compression.ZipFile]::OpenRead($release.ZipPath)
     try{
         $names=@($zip.Entries|Where-Object {-not $_.FullName.EndsWith('/')}|ForEach-Object {$_.FullName})
-        $expected=@($sources|ForEach-Object {'Maneater-Crash-FPS-Fix/'+$_})+@('Maneater-Crash-FPS-Fix/dist/dxgi.dll','Maneater-Crash-FPS-Fix/dist/build.json','Maneater-Crash-FPS-Fix/dist/dxgi_proxy.def')
+        $expected=@($sources|ForEach-Object {'Maneater-Crash-FPS-Fix/'+$_})+@('Maneater-Crash-FPS-Fix/dist/dxgi.dll','Maneater-Crash-FPS-Fix/dist/ManeaterAreaHelper.exe','Maneater-Crash-FPS-Fix/dist/build.json','Maneater-Crash-FPS-Fix/dist/dxgi_proxy.def')
         Assert-Test ($names.Count -eq $expected.Count -and @($names|Where-Object {$_ -cnotin $expected}).Count -eq 0) 'archive entry set is exact and excludes Windows DLL/tools/state/cache/debug fixtures'
         $reader=New-Object IO.StreamReader(($zip.GetEntry('Maneater-Crash-FPS-Fix/Start.cmd')).Open(),[Text.Encoding]::ASCII)
         try{$batch=$reader.ReadToEnd()}finally{$reader.Dispose()}
@@ -80,6 +78,14 @@ try{
     [IO.File]::WriteAllBytes((Join-Path $dist 'dxgi.dll'),$changed)
     Assert-Throws {Package-Fixture} 'prebuilt DLL hash mismatch refused'
     [IO.File]::WriteAllBytes((Join-Path $dist 'dxgi.dll'),$proxyBytes)
+    $changedHelper=[byte[]]$helperBytes.Clone();$changedHelper[$changedHelper.Length-1]=$changedHelper[$changedHelper.Length-1] -bxor 1
+    [IO.File]::WriteAllBytes((Join-Path $dist 'ManeaterAreaHelper.exe'),$changedHelper)
+    Assert-Throws {Package-Fixture} 'companion helper mismatch refused'
+    $manifest.HelperSHA256=Hash (Join-Path $dist 'ManeaterAreaHelper.exe');Save-Manifest $manifest
+    Assert-Throws {Package-Fixture} 'helper mismatch with embedded native source refused even after manifest update'
+    [IO.File]::WriteAllBytes((Join-Path $dist 'ManeaterAreaHelper.exe'),$helperBytes)
+    [IO.File]::WriteAllBytes((Join-Path $dist 'build.json'),$manifestBytes)
+    $manifest=Get-Content -LiteralPath (Join-Path $dist 'build.json') -Raw|ConvertFrom-Json
     [IO.File]::AppendAllText((Join-Path $dist 'dxgi_proxy.def'),"`n; changed fixture")
     Assert-Throws {Package-Fixture} 'forwarder definition mismatch refused'
     Assert-Test ((Hash $release.ZipPath) -ceq $zipHash) 'failed packaging preserves existing release ZIP'

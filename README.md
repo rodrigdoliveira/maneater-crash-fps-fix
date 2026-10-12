@@ -1,38 +1,66 @@
 # Maneater Crash & FPS Fix
 
-A free, open-source Windows launcher that applies the complete Maneater repair setup from one window. It finds the game automatically; click **Apply all fixes**, then **Play Maneater**. **Restore previous setup** reverses the changes made by the launcher.
+**Local preview 0.7.0-preview.1.** A free, open-source Windows launcher that applies the existing repair setup and three experimental native optimizations from one window. This preview includes ready-built binaries and their matching full sources. It is a local package; no new GitHub release is required.
 
-## Download and run
+The current private build already contains the same get-up, navigation and package-loading algorithms. This preview brings them into the normal launcher, upgrade and restore workflow; repackaging them does not establish a new performance improvement.
 
-1. [Download the ready-to-run launcher ZIP](https://github.com/rodrigdoliveira/maneater-crash-fps-fix/releases/latest/download/Maneater-Crash-FPS-Fix.zip) and extract it into a folder you will keep.
-2. Double-click **Start.cmd**.
+## Run the local preview
+
+1. Extract the supplied **local ready-to-run preview ZIP** into a folder you will keep.
+2. Quit Maneater and double-click **Start.cmd**.
 3. Wait for automatic detection, then click **Apply all fixes**. If the game is not found or there are multiple installations, use **Choose game...** to select **Maneater.exe** or **Maneater-Win64-Shipping.exe**.
+4. Click **Play Maneater** to start it through Steam.
 
-The ready-to-run release ZIP includes the compiled project mod and its matching full sources. No compiler or compiler download is required. The launcher searches Steam's installation folders and registered libraries, including libraries on other drives and custom folders recorded in the game manifest. It validates the included mod, detects your CPU, verifies the game build, backs up the previous setup, and applies the fixes. Manual Steam launch-option edits are not required.
+The release ZIP includes the compiled mod DLL, its matching attachment helper, manifest, full sources and tests. Installing it requires no compiler or compiler download. A source-only checkout needs the developer build described below.
 
-Choose the release asset named **Maneater-Crash-FPS-Fix.zip**. GitHub's automatic **Source code (zip/tar.gz)** downloads and repository clones are developer sources and require a manual build; the launcher does not compile or download a compiler for them.
+The launcher searches Steam's installation folders and registered libraries, including other drives and custom folders recorded in the game manifest. It detects your CPU and validates the game, packaged binaries and local Windows DXGI export contract before applying changes. Manual Steam launch-option edits are not required.
 
-Quit Maneater first. The launcher asks to close Steam briefly to save its per-game settings; **Play Maneater** starts the game through Steam again. If Windows restricts access to the game folder, the launcher offers to restart with administrator access. Keep the extracted folder: its private `.local` directory contains your restore record and backups.
-
-To update an existing setup, use the previous launcher's **Restore previous setup** first. Then replace all launcher files, including `dist`, with the new ready-to-run ZIP, retain `.local` and its backups, and apply again. An already applied repair is not automatically upgraded. A new launcher folder without the ownership records will preserve an existing, untracked mod DLL pair.
-
-**Allow an untested build (experimental)** is preselected. You can clear it to restrict Apply to the tested build. An untested build still requires acceptance of its warning before changes are made. See [Compatibility](#compatibility).
+The launcher may ask to close Steam briefly to save its per-game settings. If Windows restricts access to the game folder, it offers to restart with administrator access. Keep the extracted folder: `.local` contains the restore record and backups. Do not run two mod installers at the same time.
 
 ## What Apply all fixes does
 
+The established v0.6.0 repair setup is retained:
+
 | Fix | Applied behavior |
 | --- | --- |
-| Native FPS correction | Replaces the supported engine's forced 60 FPS request with 120 FPS through its original setter. Other requests and graphics settings are preserved. |
-| OpenSSL compatibility | Applies Maneater's official OpenSSL compatibility flag through game-specific Steam launch options. It does not set a permanent system environment variable. |
-| CPU scheduling and worker budget | Matches the game's CPU worker budget to the detected hardware. On supported Intel hybrid CPUs, it also keeps the game on performance cores. Eligible Ryzen CPUs get an experimental worker limit with normal Windows scheduling. See [the explanation and examples below](#why-the-cpu-fix-matters). |
-| Ansel SDK | Reversibly disables the recognized bundled NVIDIA Ansel SDK. This removes its photo-mode support. Already absent or externally disabled copies are preserved. |
+| Native FPS correction | Redirects the guarded engine's 60 FPS request to 120 through its original setter. Other requests and graphics-quality settings are preserved. This does not guarantee 120 rendered frames per second. |
+| OpenSSL compatibility | Applies the existing OpenSSL compatibility flag through game-specific Steam launch options. |
+| CPU scheduling and worker budget | Uses detected hardware to choose the worker budget. Supported Intel hybrid CPUs also use performance-core affinity; eligible Ryzen SMT CPUs get an experimental physical-core budget without an affinity mask. |
+| Ansel SDK | Reversibly disables the recognized bundled NVIDIA Ansel SDK, removing its photo-mode support. Unknown or already absent/disabled copies are preserved. |
 | Steam overlay | Turns off the overlay for Maneater only. |
 
-Existing ordinary game arguments and recognized OpenSSL workaround wrappers are preserved or safely normalized. Arbitrary custom command wrappers and foreign DXGI mods are not overwritten. The untested-build opt-in does not authorize replacing an unknown Ansel SDK or bypassing file-ownership checks. The launcher saves a write-ahead restore record before changing files or settings and attempts rollback if an apply operation fails. Restore preserves files/settings changed by someone else.
+The preview adds these exact-build experimental changes:
 
-These are the complete retained changes from the tested setup. They are not additional graphics reductions, save edits, executable patches or DRM bypasses. A native 60 FPS selection is also redirected to 120 FPS at the guarded caller in this release.
+| Optimization | What it changes |
+| --- | --- |
+| Human get-up animation lookup | Replaces one native lookup for an uninjured human's chest-down get-up animation. It copies the corresponding animation list and uses the game's original selector, retaining null filtering, random draws and the four existing getter calls' order. |
+| Navigation connection searches | Builds a temporary boundary-edge index during eligible area-loading calls. It returns no match early only when the original plane/overlap tests cannot succeed; possible matches still run the original finder. Direction buckets make repeated lookups cheaper. |
+| Package-loading label | Removes construction and disposal of an unused `Package ` + name string. The same inner loader receives the same original inputs, flags and return contract. |
+
+Damage and collision events are not suppressed. Navigation and asset work are not moved to another frame. The stock executable and game archives are not edited on disk. The navigation and package-loading changes use guarded native entry hooks in process memory, in addition to the inherited FPS object hook and get-up function-pointer replacement.
+
+A matching **ManeaterAreaHelper.exe** starts hidden during game startup, verifies the target and attaches the native entries, then exits. It is an attachment helper, not a gameplay profiler. The DLL/helper pair is verified together and included in the ZIP.
+
+## What changed from v0.6.0
+
+v0.6.0 already included the 120 FPS correction, Intel and experimental Ryzen CPU plans, OpenSSL flag, Ansel/overlay changes, game detection, backup/restore and the preselected untested-build option. Those are not new in this preview.
+
+The three rows above are the additions. Navigation's earlier private V1 and the included V2 are stages of one optimization: V2 groups the same temporary index by direction and retains V1's conservative rejection conditions. There are not two separate navigation fixes.
+
+The failed recovery-event asset guard and later speculative queue, persistent-cache, get-up compaction and string-search experiments are not included. See [the preview release notes](docs/release-notes-0.7.0-preview.1.md) for the comparison and evidence limits.
+
+## Upgrade and restore
+
+For an upgrade, extract the preview into a **new folder** and run its launcher. The new folder can recognize and back up the reviewed v0.6.0 and latest private native files already beside the game. Keep the earlier launcher folder and its recovery records too. If you reuse a folder with an already applied repair journal, first use that folder's old launcher to **Restore previous setup**, then replace its package files and apply the preview. An existing applied journal is not an automatic upgrade.
+
+**Apply all fixes** recognizes the reviewed public native v0.2 pair used by v0.6.0 and the known private predecessor pairs. It backs up the recognized previous files and records the complete installed tuple, including whether a helper existed. Unknown DLLs/helpers or conflicting ownership records are preserved by refusing replacement.
+
+**Restore previous setup** restores the complete previous owned setup from that record, including the previous DLL/helper tuple and launcher-managed settings. If another tool has changed a tracked file or setting, restore preserves that change instead of blindly overwriting it. Backups and ownership records are part of the installation; keep them with the launcher.
+
+Existing ordinary game arguments and recognized OpenSSL wrappers are preserved or safely normalized. Arbitrary custom launch wrappers and foreign DXGI mods are not overwritten. File replacements are atomic individually, but several files/settings are coordinated through the recovery record rather than one filesystem transaction.
 
 ## Why the CPU fix matters
+
 
 Before the repair, the player reported frequent crashes during busy scenes. The OpenSSL launch workaround helped, but attacking groups of humans on land still caused heavy stuttering and short freezes. With the complete repair setup, repeated land-combat tests and a later longer play session were reported as generally smooth, with no crash. This is the result on the tested Intel PC; the CPU change alone was not shown to prevent every crash.
 
@@ -51,60 +79,54 @@ The launcher therefore changes **both where the game runs and the core count it 
 
 The Ryzen approach aims to reduce competition between workers sharing physical cores. It follows [AMD's guidance on choosing a starting thread-pool budget](https://gpuopen.com/learn/cpu-core-count-detection-windows/), but **has not been tested in Maneater gameplay on AMD hardware** and may improve or worsen performance. Unsupported or unclear CPU layouts keep their normal settings. These changes apply to Maneater's launch, preserve graphics quality, and can be reversed with **Restore previous setup**.
 
+
 ## Compatibility
 
-Windows **10/11 x64**, Steam app **629820**. The compiled mod uses the Universal C Runtime [included with these Windows versions](https://learn.microsoft.com/en-us/cpp/windows/universal-crt-deployment?view=msvc-170). The tested reference is Steam build **7837297**, with shipping executable SHA-256:
+Windows **10/11 x64**, Steam app **629820**. The reference is Steam build **7837297**, with shipping executable SHA-256:
 
 ```text
 CC34E43BBD1F757E3883ADAF37D643C1A0FB2963967CA33AF7CB6CB8F54480C0
 ```
 
-The executable hash identifies the tested build. The GUI preselects **Allow an untested build (experimental)**, but applying to a different hash still requires acceptance of its warning for that operation. Clear the option to allow only the tested build. A previous acceptance is not a claim that another build is supported. The command-line manager and repair backend continue to require an explicit untested-build flag.
+The navigation and package-loading helper requires this full executable hash plus exact native code and caller guards. The get-up replacement instead checks the reference PE metadata, exact code, function identity and reflected field layout; it does not hash the whole executable. A different file hash that retains those checked values can still activate the getter. Such a build remains untested. A copied installation result does not prove any hook activated.
 
-This option is limited to an installation identified as Maneater in the current Steam libraries. It does not implicitly support Epic, Game Pass, other storefronts, or an arbitrary executable copied elsewhere. The actual selected executable hash is recorded in the private repair journal.
+**Allow an untested build (experimental)** remains preselected. Applying to a different executable hash still requires acceptance of its warning. Clear the option to restrict Apply to the reference build. The option does not weaken either the get-up metadata/code/layout checks or the navigation/loading full-hash checks. Navigation and loading therefore stay inactive on a different hash; get-up can attach only if its separate strict checks pass. The inherited FPS component may accept its own narrow experimental checks, or remain inactive too. The other launch workarounds remain unverified on that build.
 
-Opting in permits an experiment; it does not establish compatibility. It can relax the native version-metadata check, while keeping exact code signatures, image bounds, object layout and call-site guards. The FPS hook may decline to change anything if the game differs. An unrecognized Ansel SDK is preserved, that step is skipped, and the launcher reports a warning. The retained workarounds and their benefits also remain unverified on that build. Use **Restore previous setup** if the experiment does not help.
+Detection and untested-build opt-in are limited to Maneater installations in the current Steam libraries; they do not establish support for Epic, Game Pass or another storefront. CPU plans are derived from Windows topology, with no developer-PC affinity mask, core count or GPU requirement copied into the launcher.
 
-CPU settings are derived from Windows topology, with no preset mask or core count copied from a developer's PC. The bundle does not impose a particular GPU model.
-
-The experimental Ryzen worker limit requires a recognized AMD Ryzen CPU with SMT and a validated single processor group. Older or unidentified AMD CPUs, CPUs without SMT, and multiple processor groups are excluded. It leaves X3D/CCD placement to Windows and the chipset drivers. See [the CPU examples and testing limits above](#why-the-cpu-fix-matters).
-
-The included mod also requires a matching Windows DXGI export contract: exported names and ordinals must agree with the verified local Windows library. That Windows DLL is copied from your PC during installation, not distributed in the ZIP. A different local Windows DLL file hash alone is acceptable when the export contract matches. Missing, stale or corrupt packaged files, or an incompatible export contract, stop the repair before it changes game files or Steam settings. There is no automatic compilation fallback; download a compatible ready release or use the developer build instructions below.
-
-### Installed files versus an applied FPS correction
-
-An installation result means the launcher copied the mod files and recorded the setup. The native FPS row therefore says **Installed**, rather than claiming the FPS correction ran. It does not prove that the game loaded the hook or that its runtime checks accepted this build. After **Play Maneater**, check the latest launch's section of `maneater_codex_fps.log` in the game's `Maneater/Binaries/Win64` directory; an entry from a previous launch does not confirm the current one.
-
-The native log's `INSTALLED` entry means the guarded hook attached; `REDIRECTED` verifies that a matching game request was forwarded from 60 to 120. `PASS-THROUGH` means the native guard declined the correction. A successful redirect does not guarantee 120 rendered frames per second: game workload, display settings and other limits still affect performance. An untested build remains experimental even if it redirects.
+The compiled proxy's DXGI names and ordinals must match the local Windows library. Installation copies that verified Windows DLL from your PC; it is not distributed in the ZIP. Missing/corrupt package files or an incompatible export contract stop the repair before changing the setup.
 
 ## Results and limits
 
-Gameplay tests of the repair approach showed smoother land combat and a longer play session without a crash. The current package is checked through automated tests and source review, covering installation, restoration, DLL forwarding and native compatibility guards. Occasional gameplay and loading hitches can still occur.
+The earlier repair approach had sessions reported as smoother and crash-free on one Intel PC, but later combat and loading hitches remained. Those sessions do not validate the new native optimizations or prove that an individual workaround prevents crashes.
 
-Results vary by hardware and game build. Gameplay testing covers one configuration, so the mod does not guarantee a crash-free experience or identical improvements on every PC. The FPS correction activates only when its runtime checks pass. The OpenSSL workaround is documented by [Maneater support](https://support.maneatergame.com/en/knowledgebase/article/cant-launch-game-black-screen) and [Intel](https://www.intel.com/content/www/us/en/developer/articles/troubleshooting/openssl-sha-crash-bug-requires-application-update.html); the Ansel and overlay changes remain reversible mitigations.
+The added changes have static-code review and offline tests for forwarding, array ownership, conservative navigation decisions, x64 unwind behavior, installation, restoration and attachment rollback. The current combined algorithms have no verified gameplay benefit or real-game attachment result in the reviewed build manifest. Synthetic timing gains are not FPS or loading-time measurements.
+
+The get-up replacement has a specific semantic uncertainty: the original chest-down wrapper was not fully recovered. Verified metadata and a readable sibling support the replacement, but unknown behavior could differ. The navigation index adds build/allocation cost and depends on stable geometry within its short scope; some searches can be slower. Removing the unused loading string changes allocation statistics and allocation-failure timing. The external attachment transaction retains a possible new-thread race after its last thread census.
+
+This is an experimental preview, not a guarantee of crash-free play, eliminated stutters or identical improvements on every machine. It retains current visuals as its design goal; the unresolved get-up equivalence limits mean exact animation behavior has not been proved. Use **Restore previous setup** if it causes problems.
+
+## Check startup status
+
+The launcher reports file installation separately from runtime attachment. Startup logs beside `Maneater-Win64-Shipping.exe` provide the current launch's status:
+
+- `maneater_codex_fps.log`: `INSTALLED` means the guarded FPS hook attached; `REDIRECTED` means a matching 60-to-120 request ran. `PASS-THROUGH` means its guard declined the change.
+- `maneater_getup_fix.log`: `INSTALLED` means the one native getter pointer attached; `PASS-THROUGH` means the original stayed in use.
+- `maneater_area_fix.log` and `maneater_area_attach_*.json`: describe navigation/package attachment or refusal. An uncertain attachment report must be treated as uncertain.
+
+Read the latest launch's section, not a previous run. Attachment success verifies that a hook is present; it does not measure benefit or prove all gameplay calls use it.
 
 ## Development
 
-The Git repository and GitHub's automatic source archives contain sources under the [MIT license](LICENSE). The custom ready-to-run release ZIP also includes the compiled project DXGI forwarder, its build manifest and export definition, and matching sources. No game or Windows DLL, save, private trace, or compiler binary is distributed. Installation copies an unchanged, verified local Windows DXGI DLL beside the project mod. Existing proxy files belonging to other mods are preserved.
+Original project sources use the [MIT license](LICENSE); vendored trampoline/decoder components retain their licenses in [THIRD_PARTY.txt](THIRD_PARTY.txt). The ready-to-run ZIP includes matching full source, prebuilt DLL/helper and manifests. It contains no game binary, game asset, Windows DLL, save, private capture or compiler binary.
 
-For a developer build from a clone or source archive, obtain [Zig](https://ziglang.org/download/) and use 64-bit Windows PowerShell. The build generates a forwarder for the current local Windows export contract:
+For a source build, obtain Zig and use 64-bit Windows PowerShell:
 
 ```powershell
 .\build.ps1 -ZigPath 'D:\Tools\Zig\zig.exe'
+.\tests\Run-All.ps1 -ZigPath 'D:\Tools\Zig\zig.exe'
 ```
 
-The separate native manager remains available to contributors:
+The build creates the matching helper first and embeds its hash in the proxy. Keep the manifest and both binaries together. The tests use synthetic game/config data and inert fixture processes; they do not run Maneater or measure gameplay performance.
 
-```powershell
-.\Manage-Mod.ps1 -Action Install -GameDirectory 'D:\SteamLibrary\steamapps\common\Maneater'
-.\Manage-Mod.ps1 -Action Status
-.\Manage-Mod.ps1 -Action Uninstall
-```
-
-The native manager handles only its DLL pair. Normal users should use **Start.cmd** for the complete repair and restore.
-
-For advanced manual installation, add `-AllowUntestedBuild` to the manager's `-Action Install` command. That authorizes installation on an untested executable; it does not enable the native runtime opt-in or configure Steam. The game's own process must receive the exact environment value `MANEATER_FIX_ALLOW_UNTESTED=1` to permit experimental native metadata checks. Keep that assignment scoped to the game launch. The GUI configures it automatically for an accepted untested-build trial and sets it to `0` for the tested build.
-
-Run the isolated developer fixture suite with `tests\Run-All.ps1 -ZigPath 'D:\Tools\Zig\zig.exe'`. These tests use temporary game/config fixtures; they do not modify a real installation. Native contract tests cover guard rejection and forwarding. Actual matching-caller behavior was separately verified during gameplay with the earlier tested-build FPS core, not the new experimental-build path.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for reports and development rules, and [the technical background](docs/crash-workarounds.md) for individual changes. This is an unofficial community project; the license covers this project's original source, not third-party software.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [the technical background](docs/crash-workarounds.md). The manager is for native file installation; use **Start.cmd** for the full repair and restoration workflow.

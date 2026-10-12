@@ -3,9 +3,16 @@
 param()
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
-$root=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$sourceRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+# Keep deeply nested source checkouts from exceeding Windows PowerShell's
+# MAX_PATH. Exercise an unchanged module copy with the same fixture boundary.
+$tempPrefix=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')+'\'
+$root=Join-Path $tempPrefix ('mfx-ansel-'+[Guid]::NewGuid().ToString('N'))
+[IO.Directory]::CreateDirectory((Join-Path $root 'scripts'))|Out-Null
+[IO.Directory]::CreateDirectory((Join-Path $root 'tests'))|Out-Null
+[IO.File]::Copy((Join-Path $sourceRoot 'scripts/AnselFix.psm1'),(Join-Path $root 'scripts/AnselFix.psm1'),$false)
 Import-Module (Join-Path $root 'scripts\AnselFix.psm1') -Force -DisableNameChecking
-$testRoot=Join-Path $PSScriptRoot ('.tmp-'+[Guid]::NewGuid().ToString('N'))
+$testRoot=Join-Path (Join-Path $root 'tests') ('.tmp-'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($testRoot)|Out-Null
 $script:passed=0
 $script:fixtureLinks=@()
@@ -122,7 +129,7 @@ try{
     Assert-Test ($selectedPlan.Action -eq 'Disable') 'explicitly selected linked game root remains allowed'
     Write-Output "PASS: $script:passed Ansel contracts; no installed-game files accessed or changed."
 }finally{
-    $full=[IO.Path]::GetFullPath($testRoot);$tests=[IO.Path]::GetFullPath($PSScriptRoot).TrimEnd([char[]]'\/')+[IO.Path]::DirectorySeparatorChar
+    $full=[IO.Path]::GetFullPath($testRoot);$tests=[IO.Path]::GetFullPath((Join-Path $root 'tests')).TrimEnd([char[]]'\/')+[IO.Path]::DirectorySeparatorChar
     if(-not $full.StartsWith($tests,[StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetFileName($full) -notmatch '^\.tmp-[0-9a-f]{32}$'){throw 'Unsafe test cleanup target.'}
     # Remove only the fixture junction entries, never recursively their targets.
     foreach($link in $script:fixtureLinks){
@@ -132,4 +139,8 @@ try{
     }
     if($null -ne (Get-Module normal_ansel)){Get-Module normal_ansel|Remove-Module -Force}
     Remove-Item -LiteralPath $full -Recurse -Force
+    $safeRoot=[IO.Path]::GetFullPath($root)
+    if(-not $safeRoot.StartsWith($tempPrefix,[StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetFileName($safeRoot) -notmatch '^mfx-ansel-[0-9a-f]{32}$'){throw 'Unsafe outer fixture cleanup target.'}
+    Get-Module AnselFix | Where-Object {$_.Path -ieq (Join-Path $root 'scripts/AnselFix.psm1')} | Remove-Module -Force
+    Remove-Item -LiteralPath $safeRoot -Recurse -Force
 }

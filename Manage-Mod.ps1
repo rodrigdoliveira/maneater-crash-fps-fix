@@ -25,6 +25,19 @@ function Assert-GameClosed {
     }
 }
 function Get-Hash { param([string]$Path) return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
+function Get-RequiredBuildSources {
+    $required = [Collections.Generic.List[string]]::new()
+    foreach ($folder in @('src','vendor')) {
+        $directory = Join-Path $root $folder
+        if ([IO.Directory]::Exists($directory)) {
+            foreach ($file in Get-ChildItem -LiteralPath $directory -File -Recurse | Sort-Object FullName) {
+                $required.Add($file.FullName.Substring($root.Length+1).Replace('\','/'))
+            }
+        }
+    }
+    foreach ($name in @('scripts/PeExports.psm1','build.ps1','Manage-Mod.ps1')) { $required.Add($name) }
+    return $required.ToArray()
+}
 function Read-GameHeaderBytes {
     param([IO.Stream]$Stream, [int]$Count)
     $bytes = New-Object byte[] $Count; $offset = 0
@@ -75,18 +88,26 @@ function Write-State {
     $temporary = Join-Path $stateDirectory ('installation-' + [Guid]::NewGuid().ToString('N') + '.tmp')
     try {
         [IO.File]::WriteAllText($temporary, ($State | ConvertTo-Json -Depth 5) + "`n", [Text.UTF8Encoding]::new($false))
-        Move-Item -LiteralPath $temporary -Destination $statePath -Force
+        if ($null -eq $stateExpectedHash) { [IO.File]::Move($temporary,$statePath) }
+        else {
+            if (-not [IO.File]::Exists($statePath) -or (Get-Hash $statePath) -cne $stateExpectedHash) { throw 'Native ownership record changed; preserving it.' }
+            [IO.File]::Replace($temporary,$statePath,[NullString]::Value)
+        }
     } finally { if ([IO.File]::Exists($temporary)) { Remove-Item -LiteralPath $temporary } }
 }
 $state = $null
+$stateExpectedHash = $null
 if ([IO.File]::Exists($statePath)) {
+    $stateExpectedHash = Get-Hash $statePath
     $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    if ((Get-Hash $statePath) -cne $stateExpectedHash) { throw 'Native ownership record changed while reading it.' }
     if ($state.SchemaVersion -eq 1) {
         if ($state.GameSHA256 -ine $supportedGameHash) { throw 'Unsupported legacy installation record.' }
-    } elseif ($state.SchemaVersion -eq 2) {
+    } elseif ($state.SchemaVersion -in @(2,3)) {
         if ($state.GameSHA256 -notmatch '^[0-9A-Fa-f]{64}$' -or $state.TestedBuild -isnot [bool] -or
             $state.UntestedBuildOptIn -isnot [bool] -or $state.TestedBuild -ne ($state.GameSHA256 -ieq $supportedGameHash) -or
             (-not $state.TestedBuild -and -not $state.UntestedBuildOptIn)) { throw 'Unsupported or inconsistent installation record.' }
+        if ($state.SchemaVersion -eq 3 -and $state.HelperSHA256 -cnotmatch '^[0-9A-F]{64}$') { throw 'Invalid helper ownership hash.' }
     } else { throw 'Unsupported installation record.' }
 }
 $bin = $null
@@ -102,9 +123,9 @@ if ($null -ne $state -and $null -ne $bin -and $state.Status -eq 'installed' -and
     throw 'This source folder tracks another installation; uninstall that record first.'
 }
 if ($Action -eq 'Status') {
-    $proxyPresent = $false; $systemPresent = $false
-    if ($null -ne $bin) { $proxyPresent = [IO.File]::Exists((Join-Path $bin 'dxgi.dll')); $systemPresent = [IO.File]::Exists((Join-Path $bin 'dxgi_codex_system.dll')) }
-    [pscustomobject]@{ GameDirectory = $bin; ProxyPresent = $proxyPresent; SystemCopyPresent = $systemPresent; StatePresent = $null -ne $state
+    $proxyPresent = $false; $systemPresent = $false; $helperPresent = $false
+    if ($null -ne $bin) { $proxyPresent = [IO.File]::Exists((Join-Path $bin 'dxgi.dll')); $systemPresent = [IO.File]::Exists((Join-Path $bin 'dxgi_codex_system.dll')); $helperPresent = [IO.File]::Exists((Join-Path $bin 'ManeaterAreaHelper.exe')) }
+    [pscustomobject]@{ GameDirectory = $bin; ProxyPresent = $proxyPresent; SystemCopyPresent = $systemPresent; HelperPresent = $helperPresent; StatePresent = $null -ne $state
         RecordedStatus = $(if ($null -ne $state) { $state.Status } else { 'none' }); GameSHA256 = $(if ($null -ne $state) { $state.GameSHA256 } else { $null })
         TestedBuild = $(if ($null -eq $state) { $null } elseif ($state.SchemaVersion -eq 1) { $true } else { $state.TestedBuild })
         UntestedBuildOptIn = $(if ($null -eq $state -or $state.SchemaVersion -eq 1) { $false } else { $state.UntestedBuildOptIn }) }
@@ -116,11 +137,13 @@ if ($Action -eq 'Uninstall') {
     if ($state.Status -eq 'uninstalled') { 'Already uninstalled.'; return }
     if ($state.Status -ne 'installed' -or $state.GameDirectory -ine $bin) { throw 'Installation record does not match the selected game directory.' }
     $targets = @(@{ Path = Join-Path $bin 'dxgi.dll'; Hash = $state.ModSHA256 }, @{ Path = Join-Path $bin 'dxgi_codex_system.dll'; Hash = $state.SystemSHA256 })
-    # Verify both before deleting either; preserve all files if one is foreign.
+    if ($state.SchemaVersion -eq 3) { $targets += @{ Path = Join-Path $bin 'ManeaterAreaHelper.exe'; Hash = $state.HelperSHA256 } }
+    # Verify the whole owned tuple before deleting any member.
     foreach ($entry in $targets) { if ([IO.File]::Exists($entry.Path)) { Assert-OwnedTarget $entry.Path $entry.Hash $bin } }
+    if (-not [IO.File]::Exists($statePath) -or (Get-Hash $statePath) -cne $stateExpectedHash) { throw 'Native ownership record changed; preserving the current files.' }
     foreach ($entry in $targets) { if ([IO.File]::Exists($entry.Path)) { Remove-Item -LiteralPath $entry.Path } }
     $state.Status = 'uninstalled'; Write-State $state
-    'Native FPS mod uninstalled.'; return
+    'Combined native fixes uninstalled.'; return
 }
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or -not [Environment]::Is64BitProcess) { throw 'Install with 64-bit PowerShell on Windows.' }
 $gameExe = Join-Path $bin 'Maneater-Win64-Shipping.exe'
@@ -129,14 +152,16 @@ $gameHash = Get-Hash $gameExe
 if ($PSBoundParameters.ContainsKey('ExpectedGameSHA256') -and $gameHash -ine $ExpectedGameSHA256) { throw 'Game executable changed since selection; nothing installed. Select it again.' }
 $testedBuild = $gameHash -ieq $supportedGameHash
 if (-not $testedBuild -and -not $AllowUntestedBuild) { throw 'This game build is untested. Explicit -AllowUntestedBuild is required to proceed; nothing installed.' }
-$dist = Join-Path $root 'dist'; $modSource = Join-Path $dist 'dxgi.dll'; $definition = Join-Path $dist 'dxgi_proxy.def'
+$dist = Join-Path $root 'dist'; $modSource = Join-Path $dist 'dxgi.dll'; $definition = Join-Path $dist 'dxgi_proxy.def'; $helperSource = Join-Path $dist 'ManeaterAreaHelper.exe'
 $manifest = Get-Content -LiteralPath (Join-Path $dist 'build.json') -Raw | ConvertFrom-Json
-if ($manifest.SchemaVersion -ne 1 -or $manifest.GameSHA256 -ine $supportedGameHash -or $manifest.TargetFPS -ne 120) { throw 'Unsupported build manifest.' }
-foreach ($relative in @('src/maneater_fps_hook.c', 'scripts/PeExports.psm1', 'build.ps1', 'Manage-Mod.ps1')) {
+if ($manifest.SchemaVersion -ne 1 -or $manifest.Version -cne '0.7.0-preview.1' -or $manifest.GameSHA256 -ine $supportedGameHash -or $manifest.TargetFPS -ne 120 -or $manifest.HelperSHA256 -cnotmatch '^[0-9A-F]{64}$') { throw 'Unsupported build manifest.' }
+$requiredSources = @(Get-RequiredBuildSources)
+if (@($manifest.SourceHashes.PSObject.Properties).Count -ne $requiredSources.Count -or 'src/maneater_fps_hook.c' -cnotin $requiredSources) { throw 'Incomplete build source provenance.' }
+foreach ($relative in $requiredSources) {
     $recorded = $manifest.SourceHashes.PSObject.Properties[$relative]
     if ($null -eq $recorded -or (Get-Hash (Join-Path $root $relative)) -ine $recorded.Value) { throw 'Source scripts changed since compilation; rebuild before installing.' }
 }
-if ((Get-Hash $modSource) -ine $manifest.ModSHA256 -or (Get-Hash $definition) -ine $manifest.DefinitionSHA256) { throw 'Built files changed; rebuild before installing.' }
+if ((Get-Hash $modSource) -ine $manifest.ModSHA256 -or (Get-Hash $definition) -ine $manifest.DefinitionSHA256 -or (Get-Hash $helperSource) -cne $manifest.HelperSHA256) { throw 'Built files changed; rebuild before installing.' }
 $system = Get-VerifiedWindowsDxgi
 if ($system.Table.ContractSHA256 -cne $manifest.SystemExportsSHA256 -or
     (Get-ExportContractHash -Exports @($manifest.SystemExports)) -cne $manifest.SystemExportsSHA256) { throw 'Windows DXGI export contract changed; rebuild before installing.' }
@@ -145,25 +170,39 @@ if ($proxy.FileSHA256 -cne $manifest.ModSHA256 -or $proxy.ContractSHA256 -cne $m
     throw 'Proxy changed during validation or differs from its build manifest.'
 }
 Assert-DxgiForwarderTable -Proxy $proxy -System $system.Table
-$modTarget = Join-Path $bin 'dxgi.dll'; $systemTarget = Join-Path $bin 'dxgi_codex_system.dll'
-foreach ($target in @($modTarget, $systemTarget)) { if (Test-Path -LiteralPath $target) { throw "Existing file preserved: $target" } }
-$systemHash = $system.Table.FileSHA256; $modHash = [string]$manifest.ModSHA256; $copiedSystem = $false; $copiedMod = $false
+$modTarget = Join-Path $bin 'dxgi.dll'; $systemTarget = Join-Path $bin 'dxgi_codex_system.dll'; $helperTarget = Join-Path $bin 'ManeaterAreaHelper.exe'
+foreach ($target in @($modTarget, $systemTarget, $helperTarget)) { if (Test-Path -LiteralPath $target) { throw "Existing file preserved: $target" } }
+$systemHash = $system.Table.FileSHA256; $modHash = [string]$manifest.ModSHA256; $helperHash = [string]$manifest.HelperSHA256; $copiedSystem = $false; $copiedMod = $false; $copiedHelper = $false
 Assert-GameClosed
 $copyGameHash = Get-Hash $gameExe
 if ($copyGameHash -cne $gameHash) { throw 'Game executable changed during preparation; nothing installed. Select it again.' }
+$stageSystem = Join-Path $bin ('native-system-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+$stageMod = Join-Path $bin ('native-mod-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+$stageHelper = Join-Path $bin ('native-helper-' + [Guid]::NewGuid().ToString('N') + '.tmp')
 try {
-    [IO.File]::Copy($system.Path, $systemTarget, $false); $copiedSystem = $true
-    [IO.File]::Copy($modSource, $modTarget, $false); $copiedMod = $true
-    Assert-OwnedTarget $systemTarget $systemHash $bin; Assert-OwnedTarget $modTarget $modHash $bin
-    Write-State ([pscustomobject]@{ SchemaVersion = 2; Status = 'installed'; GameDirectory = $bin; GameSHA256 = $gameHash
+    [IO.File]::Copy($system.Path,$stageSystem,$false)
+    [IO.File]::Copy($modSource,$stageMod,$false)
+    [IO.File]::Copy($helperSource,$stageHelper,$false)
+    if ((Get-Hash $stageSystem) -cne $systemHash -or (Get-Hash $stageMod) -cne $modHash -or (Get-Hash $stageHelper) -cne $helperHash) { throw 'Staged native tuple changed; nothing published.' }
+    Assert-GameClosed
+    if ((Get-Hash $gameExe) -cne $gameHash) { throw 'Game executable changed before native publication.' }
+    if ($null -ne $stateExpectedHash -and (-not [IO.File]::Exists($statePath) -or (Get-Hash $statePath) -cne $stateExpectedHash)) { throw 'Native ownership record changed during preparation.' }
+    # Publication is absent-only. The composite repair journal owns recovery
+    # from a terminated install; the direct manager rolls back known bytes.
+    [IO.File]::Move($stageSystem,$systemTarget); $copiedSystem = $true
+    [IO.File]::Move($stageMod,$modTarget); $copiedMod = $true
+    # PREVIEW_BEFORE_HELPER_PUBLISH
+    [IO.File]::Move($stageHelper,$helperTarget); $copiedHelper = $true
+    Assert-OwnedTarget $systemTarget $systemHash $bin; Assert-OwnedTarget $modTarget $modHash $bin; Assert-OwnedTarget $helperTarget $helperHash $bin
+    Write-State ([pscustomobject]@{ SchemaVersion = 3; Status = 'installed'; GameDirectory = $bin; GameSHA256 = $gameHash
         TestedBuild = [bool]$testedBuild; UntestedBuildOptIn = [bool](-not $testedBuild -and $AllowUntestedBuild)
-        ModSHA256 = $modHash; SystemSHA256 = $systemHash; SystemExportsSHA256 = $system.Table.ContractSHA256; InstalledUTC = [DateTime]::UtcNow.ToString('o') })
-    if ($testedBuild) { 'Native FPS mod installed. Check maneater_codex_fps.log after loading a save.' }
-    else { 'Native FPS mod installed for an untested build. Runtime guards may leave the hook inactive; check maneater_codex_fps.log after loading a save.' }
+        ModSHA256 = $modHash; SystemSHA256 = $systemHash; HelperSHA256 = $helperHash; SystemExportsSHA256 = $system.Table.ContractSHA256; InstalledUTC = [DateTime]::UtcNow.ToString('o') })
+    if ($testedBuild) { 'Combined native fixes installed. Check maneater_codex_fps.log after loading a save.' }
+    else { 'Combined native fixes installed for an untested build. Runtime guards may leave hooks inactive; check maneater_codex_fps.log after loading a save.' }
 } catch {
     $installationError = $_
     $rollbackErrors = @()
-    foreach ($entry in @(@{ Copied = $copiedMod; Path = $modTarget; Hash = $modHash }, @{ Copied = $copiedSystem; Path = $systemTarget; Hash = $systemHash })) {
+    foreach ($entry in @(@{ Copied = $copiedMod; Path = $modTarget; Hash = $modHash }, @{ Copied = $copiedSystem; Path = $systemTarget; Hash = $systemHash }, @{ Copied = $copiedHelper; Path = $helperTarget; Hash = $helperHash })) {
         if ($entry.Copied -and [IO.File]::Exists($entry.Path)) {
             try { Assert-OwnedTarget $entry.Path $entry.Hash $bin; Remove-Item -LiteralPath $entry.Path }
             catch { $rollbackErrors += $_.Exception.Message }
@@ -171,4 +210,6 @@ try {
     }
     if ($rollbackErrors.Count -ne 0) { throw ('Installation failed: ' + $installationError.Exception.Message + ' Rollback preserved changed files: ' + ($rollbackErrors -join '; ')) }
     throw $installationError
+} finally {
+    foreach ($staged in @($stageMod,$stageSystem,$stageHelper)) { if ([IO.File]::Exists($staged)) { [IO.File]::Delete($staged) } }
 }

@@ -14,7 +14,9 @@
 #define CALLER_RETURN_ADDRESS() __builtin_extract_return_addr(__builtin_return_address(0))
 #endif
 
-/* This DLL changes no executable bytes and makes no CVar calls from its worker.
+/* The FPS component changes no executable bytes or CVar state from its worker.
+ * The additional private navigation component uses an external transaction
+ * to attach two exact-build native entry hooks; see nav_runtime.h.
  * It forwards one object's existing Set call, changing 60 to 120 only for the
  * verified engine SetMaxFPS callsite. Other requests retain their original ABI.
  * Strict metadata is the default. An explicit game-process environment flag
@@ -374,6 +376,9 @@ static int validate_object(void *object, void ***vtable_out, float values[2], ui
     return 1;
 }
 
+#include "getup_runtime.h"
+#include "nav_runtime.h"
+
 static DWORD WINAPI install_worker(void *unused) {
     void *object = NULL;
     void **original_vtable = NULL;
@@ -390,6 +395,8 @@ static DWORD WINAPI install_worker(void *unused) {
         log_line("PASS-THROUGH: runtime build/signature guard rejected this executable; no object changed.");
         goto done;
     }
+    getup_start_worker();
+    nav_start_worker();
     if (g_experimental_build) {
         log_line("EXPERIMENTAL: explicit process opt-in allowed different PE metadata; exact fixed-RVA signatures matched. CVar identity/layout guards remain mandatory.");
     }

@@ -2,11 +2,11 @@
 # Ansel backends operate on fixture files only. Process/registry/CPU/compiler/
 # Windows-DXGI/native-installer boundaries are mocked; no game or DLL is loaded.
 [CmdletBinding()]
-param()
+param([switch]$DefinitionsOnly)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 $sourceRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$testRoot=Join-Path $PSScriptRoot ('.tmp-'+[Guid]::NewGuid().ToString('N'))
+$testRoot=Join-Path ([IO.Path]::GetTempPath()) ('me-preview-repair-'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($testRoot)|Out-Null
 $script:passed=0
 function Assert-Test([bool]$Condition,[string]$Message){if(-not $Condition){throw "FAIL: $Message"};$script:passed++}
@@ -41,7 +41,8 @@ function New-Scenario([string]$Name){
     [IO.File]::WriteAllText($config,'"UserLocalConfigStore" { "apps" { "629820" { "OverlayAppEnable" "1" } } "Software" { "Valve" { "Steam" { "apps" { "629820" { "LaunchOptions" "" } } } } } }',[Text.UTF8Encoding]::new($false))
     $mod=Join-Path $repo 'dist\dxgi.dll';$system=Join-Path $repo 'dist\fixture-system.dll'
     [IO.File]::WriteAllText($mod,'fixture new proxy');[IO.File]::WriteAllText($system,'fixture system copy')
-    $manifest=[pscustomobject]@{GameSHA256=(Hash $exe);TargetFPS=120;ModSHA256=(Hash $mod)}
+    $helper=Join-Path $repo 'dist\ManeaterAreaHelper.exe';[IO.File]::WriteAllText($helper,'inert fixture helper; never executed')
+    $manifest=[pscustomobject]@{Version='0.7.0-preview.1';GameSHA256=(Hash $exe);TargetFPS=120;ModSHA256=(Hash $mod);HelperSHA256=(Hash $helper)}
     [IO.File]::WriteAllText((Join-Path $repo 'dist\build.json'),($manifest|ConvertTo-Json))
     $installer=@'
 param([string]$Action,[string]$GameDirectory,[switch]$AllowUntestedBuild,[string]$ExpectedGameSHA256)
@@ -55,9 +56,10 @@ $tested=$gameHash -ceq $template.GameSHA256
 if(-not $tested -and -not $AllowUntestedBuild){throw 'Fixture unknown build needs opt-in.'}
 [IO.File]::Copy((Join-Path $root 'dist\fixture-system.dll'),(Join-Path $GameDirectory 'dxgi_codex_system.dll'),$false)
 [IO.File]::Copy((Join-Path $root 'dist\dxgi.dll'),(Join-Path $GameDirectory 'dxgi.dll'),$false)
+[IO.File]::Copy((Join-Path $root 'dist\ManeaterAreaHelper.exe'),(Join-Path $GameDirectory 'ManeaterAreaHelper.exe'),$false)
 $mode=Join-Path $root '.local\fail-native'
 if([IO.File]::Exists($mode)){throw 'Injected failure after native copies before installation record.'}
-$record=[pscustomobject]@{SchemaVersion=2;Status='installed';GameDirectory=$GameDirectory;GameSHA256=$gameHash;TestedBuild=$tested;UntestedBuildOptIn=(-not $tested -and [bool]$AllowUntestedBuild);ModSHA256=(Get-FileHash (Join-Path $GameDirectory 'dxgi.dll')).Hash;SystemSHA256=(Get-FileHash (Join-Path $GameDirectory 'dxgi_codex_system.dll')).Hash}
+$record=[pscustomobject]@{SchemaVersion=3;Status='installed';GameDirectory=$GameDirectory;GameSHA256=$gameHash;TestedBuild=$tested;UntestedBuildOptIn=(-not $tested -and [bool]$AllowUntestedBuild);ModSHA256=(Get-FileHash (Join-Path $GameDirectory 'dxgi.dll')).Hash;SystemSHA256=(Get-FileHash (Join-Path $GameDirectory 'dxgi_codex_system.dll')).Hash;HelperSHA256=(Get-FileHash (Join-Path $GameDirectory 'ManeaterAreaHelper.exe')).Hash}
 [IO.File]::WriteAllText($state,($record|ConvertTo-Json))
 if([IO.File]::Exists((Join-Path $root '.local\fail-native-after-state'))){throw 'Injected failure after native state write before return.'}
 '@
@@ -83,7 +85,7 @@ if([IO.File]::Exists((Join-Path $root '.local\fail-native-after-state'))){throw 
     $steamModule=& $module {(Get-Command Invoke-SteamFixPlan).Module}
     if($steamModule.Path -ine (Join-Path $repo 'scripts\SteamFix.psm1')){throw 'Process guard mock must be inside the isolated Steam module copy.'}
     & $steamModule {function script:Assert-SteamFixClosed {}; function script:Get-SteamFixRunningProcesses {@()}}
-    [pscustomobject]@{Root=$repo;Module=$module;Game=$game;Bin=$bin;Exe=$exe;Ansel=$ansel;Config=$config;OriginalConfig=[IO.File]::ReadAllBytes($config);Context=$context;Mod=$mod;System=$system}
+    [pscustomobject]@{Root=$repo;Module=$module;Game=$game;Bin=$bin;Exe=$exe;Ansel=$ansel;Config=$config;OriginalConfig=[IO.File]::ReadAllBytes($config);Context=$context;Mod=$mod;System=$system;Helper=$helper}
 }
 function Invoke-Case($Case,[switch]$AllowUntestedBuild,[string]$ExpectedGameSHA256,[scriptblock]$Progress={}){& $Case.Module {param($Exe,$Context,$Allow,$Expected,$Progress) $params=@{GameExecutable=$Exe;SteamContext=$Context;AllowUntestedBuild=$Allow;Progress=$Progress};if($Expected){$params.ExpectedGameSHA256=$Expected};Invoke-ManeaterRepair @params} $Case.Exe $Case.Context ([bool]$AllowUntestedBuild) $ExpectedGameSHA256 $Progress}
 function Restore-Case($Case){& $Case.Module {Restore-ManeaterRepair}}
@@ -95,6 +97,7 @@ function Set-OldNative($Case,[switch]$SameHashes){
     if($SameHashes){[IO.File]::Copy($Case.Mod,$mod,$false)}else{[IO.File]::WriteAllText($mod,'fixture owned previous proxy')}
     [IO.File]::Copy($Case.System,$system,$false)
     $record=[pscustomobject]@{SchemaVersion=2;Status='installed';GameDirectory=$Case.Bin;GameSHA256=(Hash $Case.Exe);TestedBuild=$true;UntestedBuildOptIn=$false;ModSHA256=(Hash $mod);SystemSHA256=(Hash $system);PreviousMetadata='must survive upgrade and rollback'}
+    if($SameHashes){$record.SchemaVersion=3;[IO.File]::Copy($Case.Helper,(Join-Path $Case.Bin 'ManeaterAreaHelper.exe'),$false);$record|Add-Member HelperSHA256 (Hash $Case.Helper)}
     [IO.File]::WriteAllText((Join-Path $Case.Root '.local\installation.json'),($record|ConvertTo-Json))
     return $record
 }
@@ -113,7 +116,7 @@ function Use-RealBundleReadiness($Case){
     foreach($relative in @('src/maneater_fps_hook.c','scripts/PeExports.psm1','build.ps1','Manage-Mod.ps1')){$hashes[$relative]=Hash (Join-Path $Case.Root $relative)}
     $exports=@([pscustomobject]@{Name='Alpha';Ordinal=1},[pscustomobject]@{Name='Beta';Ordinal=2})
     $contract=& $Case.Module {param($Exports) Get-ExportContractHash -Exports $Exports} $exports
-    $manifest=[pscustomobject]@{SchemaVersion=1;GameSHA256=(Hash $Case.Exe);TargetFPS=120;ModSHA256=(Hash $Case.Mod);DefinitionSHA256=(Hash $definition);SystemExportsSHA256=$contract;ModExportsSHA256=$contract;SystemExports=$exports;BuildSystemDLLSHA256=(Hash $Case.System);SourceHashes=$hashes}
+    $manifest=[pscustomobject]@{SchemaVersion=1;Version='0.7.0-preview.1';GameSHA256=(Hash $Case.Exe);TargetFPS=120;ModSHA256=(Hash $Case.Mod);HelperSHA256=(Hash $Case.Helper);DefinitionSHA256=(Hash $definition);SystemExportsSHA256=$contract;ModExportsSHA256=$contract;SystemExports=$exports;BuildSystemDLLSHA256=(Hash $Case.System);SourceHashes=$hashes}
     [IO.File]::WriteAllText((Join-Path $Case.Root 'dist\build.json'),($manifest|ConvertTo-Json -Depth 6))
     $tokens=$null;$errors=$null
     $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $sourceRoot 'scripts\Repair.psm1'),[ref]$tokens,[ref]$errors)
@@ -131,13 +134,15 @@ function Use-RealBundleReadiness($Case){
 }
 function Manual-Journal($Case,[string]$Action){
     $plan=& $Case.Module {param($Exe,$Context) Get-ManeaterRepairPlan -GameExecutable $Exe -SteamContext $Context} $Case.Exe $Case.Context
-    $plan.Native.Action=$Action;$plan.Native.InstalledHash=Hash $Case.Mod;$plan.Native.InstalledSystemHash=Hash $Case.System
+    $plan.Native.Action=$Action;$plan.Native.InstalledHash=Hash $Case.Mod;$plan.Native.InstalledSystemHash=Hash $Case.System;$plan.Native.InstalledHelperHash=Hash $Case.Helper
     $backup=Join-Path $Case.Root '.local\backups\manual';[IO.Directory]::CreateDirectory($backup)|Out-Null
     $plan.Native.BackupMod=Join-Path $backup 'previous-dxgi.dll';$plan.Native.BackupSystem=Join-Path $backup 'previous-system-dxgi.dll'
+    $plan.Native.BackupHelper=Join-Path $backup 'previous-ManeaterAreaHelper.exe'
     $journal=[pscustomobject]@{SchemaVersion=1;Status='applying';Plan=$plan;BackupDirectory=$backup;SteamRecord=$null;Errors=@();StartedUTC=[DateTime]::UtcNow.ToString('o')}
     & $Case.Module {param($Journal) Write-RepairJson -Path (Get-RepairStatePath) -Value $Journal} $journal
     $journal
 }
+if($DefinitionsOnly){return}
 try{
     $case=New-Scenario 'roundtrip';$journal=Invoke-Case $case
     Assert-Test ($journal.Status -eq 'applied') 'composite apply completed'
@@ -256,7 +261,7 @@ try{
     Assert-Test ((Same-NativeRecord $case $oldRecord) -and (Hash (Join-Path $case.Bin 'dxgi.dll')) -ceq $oldRecord.ModSHA256 -and (Hash (Join-Path $case.Bin 'dxgi_codex_system.dll')) -ceq $oldRecord.SystemSHA256) 'owned upgrade restores exact old pair and all prior record metadata'
 
     $case=New-Scenario 'owned-before-backup';$oldRecord=Set-OldNative $case
-    Assert-Throws {Invoke-Case $case -Progress {param($message) if($message -ceq 'Installing the native FPS correction...'){throw 'Injected before owned backup.'}}} 'owned upgrade pre-backup interruption reported'
+    Assert-Throws {Invoke-Case $case -Progress {param($message) if($message -ceq 'Installing the combined native fixes...'){throw 'Injected before owned backup.'}}} 'owned upgrade pre-backup interruption reported'
     Assert-Test ((Read-Journal $case).Status -eq 'restored' -and (Same-NativeRecord $case $oldRecord) -and (Hash (Join-Path $case.Bin 'dxgi.dll')) -ceq $oldRecord.ModSHA256) 'preexisting old native state accepted without backups or mutations'
 
     foreach($phase in @('fail-native','fail-native-after-state')){
@@ -365,8 +370,8 @@ try{
 
     Write-Output "PASS: $script:passed composite repair contracts; isolated fake installation only."
 }finally{
-    $full=[IO.Path]::GetFullPath($testRoot);$prefix=[IO.Path]::GetFullPath($PSScriptRoot).TrimEnd([char[]]'\/')+[IO.Path]::DirectorySeparatorChar
-    if(-not $full.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetFileName($full) -notmatch '^\.tmp-[0-9a-f]{32}$'){throw 'Unsafe test cleanup target.'}
+    $full=[IO.Path]::GetFullPath($testRoot);$prefix=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([char[]]'\/')+[IO.Path]::DirectorySeparatorChar
+    if(-not $full.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetFileName($full) -notmatch '^me-preview-repair-[0-9a-f]{32}$'){throw 'Unsafe test cleanup target.'}
     Get-Module Repair,AnselFix,SteamFix,CpuPlan,Compiler,PeExports|Remove-Module -Force
     Remove-Item -LiteralPath $full -Recurse -Force
 }

@@ -3,6 +3,9 @@ $ErrorActionPreference = 'Stop'
 $script:Root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $script:SupportedGameHash = 'CC34E43BBD1F757E3883ADAF37D643C1A0FB2963967CA33AF7CB6CB8F54480C0'
 $script:LegacyModHash = '5C9EF79C6F5EBC99DB15E62E883F5635FF4133442BFDE6891D98A38A1B9129E6'
+$script:PublicV02ModHash = '3D6BE39D601175AD5DC435A68EFB6036C107C0646C94A99300567F82387B660E'
+$script:PrivateLoadingModHash = '03FAD0061DD00A332E2C93CA10FE3ECF2379ADAFBEBE7A59A2FFDE384A11E744'
+$script:PrivateLoadingHelperHash = 'B1399B39E4CA9E7E1C48F761AFA42FB0649A239F7EC55F6706655FC76FDC21B4'
 foreach ($name in @('PeExports', 'CpuPlan', 'SteamFix', 'AnselFix')) { Import-Module (Join-Path $PSScriptRoot ($name + '.psm1')) -Force -DisableNameChecking }
 function Get-RepairHash { param([string]$Path) (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
 function Write-RepairJson {
@@ -69,12 +72,23 @@ function Test-RepairAnselSkipped {
 function Get-RepairBuildReady {
     try {
         $manifest = Get-Content -LiteralPath (Join-Path $script:Root 'dist\build.json') -Raw | ConvertFrom-Json
-        if ($manifest.SchemaVersion -ne 1 -or $manifest.GameSHA256 -cne $script:SupportedGameHash -or $manifest.TargetFPS -ne 120) { return $false }
-        foreach ($relative in @('src/maneater_fps_hook.c','scripts/PeExports.psm1','build.ps1','Manage-Mod.ps1')) {
-            if ((Get-RepairHash (Join-Path $script:Root $relative)) -cne $manifest.SourceHashes.PSObject.Properties[$relative].Value) { return $false }
+        if ($manifest.SchemaVersion -ne 1 -or $manifest.Version -cne '0.7.0-preview.1' -or $manifest.GameSHA256 -cne $script:SupportedGameHash -or $manifest.TargetFPS -ne 120 -or $manifest.HelperSHA256 -cnotmatch '^[0-9A-F]{64}$') { return $false }
+        $sources = [Collections.Generic.List[string]]::new()
+        foreach ($folder in @('src','vendor')) {
+            $directory = Join-Path $script:Root $folder
+            if ([IO.Directory]::Exists($directory)) {
+                foreach ($file in Get-ChildItem -LiteralPath $directory -File -Recurse | Sort-Object FullName) { $sources.Add($file.FullName.Substring($script:Root.Length+1).Replace('\','/')) }
+            }
+        }
+        foreach ($name in @('scripts/PeExports.psm1','build.ps1','Manage-Mod.ps1')) { $sources.Add($name) }
+        if ('src/maneater_fps_hook.c' -cnotin $sources -or @($manifest.SourceHashes.PSObject.Properties).Count -ne $sources.Count) { return $false }
+        foreach ($relative in $sources) {
+            $property = $manifest.SourceHashes.PSObject.Properties[$relative]
+            if ($null -eq $property -or $property.Value -cnotmatch '^[0-9A-F]{64}$' -or (Get-RepairHash (Join-Path $script:Root $relative)) -cne $property.Value) { return $false }
         }
         if ((Get-RepairHash (Join-Path $script:Root 'dist\dxgi.dll')) -cne $manifest.ModSHA256 -or
-            (Get-RepairHash (Join-Path $script:Root 'dist\dxgi_proxy.def')) -cne $manifest.DefinitionSHA256) { return $false }
+            (Get-RepairHash (Join-Path $script:Root 'dist\dxgi_proxy.def')) -cne $manifest.DefinitionSHA256 -or
+            (Get-RepairHash (Join-Path $script:Root 'dist\ManeaterAreaHelper.exe')) -cne $manifest.HelperSHA256) { return $false }
         $system = Get-VerifiedWindowsDxgi
         if ($system.Table.ContractSHA256 -cne $manifest.SystemExportsSHA256 -or
             (Get-ExportContractHash -Exports @($manifest.SystemExports)) -cne $manifest.SystemExportsSHA256) { return $false }
@@ -86,38 +100,43 @@ function Get-RepairBuildReady {
 }
 function Get-NativeRepairPlan {
     param($Game)
-    $mod = Join-Path $Game.Bin 'dxgi.dll'; $systemCopy = Join-Path $Game.Bin 'dxgi_codex_system.dll'
-    $modPresent = [IO.File]::Exists($mod); $systemPresent = [IO.File]::Exists($systemCopy)
-    $action = 'Install'; $oldModHash = $null; $oldSystemHash = $null; $originalNativeRecord = $null
+    $mod = Join-Path $Game.Bin 'dxgi.dll'; $systemCopy = Join-Path $Game.Bin 'dxgi_codex_system.dll'; $helper = Join-Path $Game.Bin 'ManeaterAreaHelper.exe'
+    $modPresent = [IO.File]::Exists($mod); $systemPresent = [IO.File]::Exists($systemCopy); $helperPresent = [IO.File]::Exists($helper)
+    $action = 'Install'; $oldModHash = $null; $oldSystemHash = $null; $oldHelperHash = $null; $originalNativeRecord = $null
     $nativeState = Join-Path $script:Root '.local\installation.json'
     if ([IO.File]::Exists($nativeState)) {
         $existingRecord = Get-Content -LiteralPath $nativeState -Raw | ConvertFrom-Json
         if ($existingRecord.Status -eq 'installed' -and $existingRecord.GameDirectory -ine $Game.Bin) { throw 'This launcher already tracks a different native installation. Restore it first.' }
     }
-    if ($modPresent -or $systemPresent) {
+    if ($modPresent -or $systemPresent -or $helperPresent) {
         if (-not ($modPresent -and $systemPresent)) { throw 'An existing DXGI mod is incomplete or foreign. Its files were preserved.' }
         $oldModHash = Get-RepairHash $mod; $oldSystemHash = Get-RepairHash $systemCopy
+        if ($helperPresent) { $oldHelperHash = Get-RepairHash $helper }
         if ([IO.File]::Exists($nativeState)) {
             $record = Get-Content -LiteralPath $nativeState -Raw | ConvertFrom-Json
-            if ($record.Status -eq 'installed' -and $record.GameDirectory -ieq $Game.Bin -and $record.ModSHA256 -ceq $oldModHash -and $record.SystemSHA256 -ceq $oldSystemHash) {
+            $recordHelper = $(if ($record.SchemaVersion -eq 3) { $record.HelperSHA256 } else { $null })
+            if ($record.SchemaVersion -in @(1,2,3) -and $record.Status -eq 'installed' -and $record.GameDirectory -ieq $Game.Bin -and $record.ModSHA256 -ceq $oldModHash -and $record.SystemSHA256 -ceq $oldSystemHash -and $recordHelper -ceq $oldHelperHash) {
                 $originalNativeRecord = $record
                 $action = 'ReplaceRecognized'
                 if (Get-RepairBuildReady) {
                     $build = Get-Content -LiteralPath (Join-Path $script:Root 'dist\build.json') -Raw | ConvertFrom-Json
                     $system = Get-VerifiedWindowsDxgi
                     $recordGameMatches = $null -ne $record.PSObject.Properties['GameSHA256'] -and $record.GameSHA256 -ceq $Game.GameSHA256
-                    if ($record.SchemaVersion -eq 2) {
+                    if ($record.SchemaVersion -in @(2,3)) {
                         $recordGameMatches = $recordGameMatches -and $record.TestedBuild -eq (Test-RepairGameTested $Game) -and
                             $record.UntestedBuildOptIn -eq (-not (Test-RepairGameTested $Game))
                     }
-                    if ($oldModHash -ceq $build.ModSHA256 -and $oldSystemHash -ceq $system.Table.FileSHA256 -and $recordGameMatches) { $action = 'None' }
+                    if ($oldModHash -ceq $build.ModSHA256 -and $oldSystemHash -ceq $system.Table.FileSHA256 -and $oldHelperHash -ceq $build.HelperSHA256 -and $recordGameMatches) { $action = 'None' }
                 }
             } else { throw 'Native installation record does not match the files. Restore or repair that installation first.' }
         } else {
-            $known = $oldModHash -ceq $script:LegacyModHash
+            $known = (-not $helperPresent) -and ($oldModHash -ceq $script:LegacyModHash -or $oldModHash -ceq $script:PublicV02ModHash)
+            $known = $known -or ((Test-RepairGameTested $Game) -and $oldModHash -ceq $script:PrivateLoadingModHash -and $oldHelperHash -ceq $script:PrivateLoadingHelperHash)
             if (Get-RepairBuildReady) {
                 $build = Get-Content -LiteralPath (Join-Path $script:Root 'dist\build.json') -Raw | ConvertFrom-Json
-                $known = $known -or ($oldModHash -ceq $build.ModSHA256)
+                $knownCurrent = $oldModHash -ceq $build.ModSHA256 -and $oldHelperHash -ceq $build.HelperSHA256
+                if ($oldModHash -ceq $script:PrivateLoadingModHash -and $oldHelperHash -ceq $script:PrivateLoadingHelperHash -and -not (Test-RepairGameTested $Game)) { $knownCurrent = $false }
+                $known = $known -or $knownCurrent
             }
             $signature = Get-AuthenticodeSignature -LiteralPath $systemCopy
             if (-not $known -or $signature.Status -ne 'Valid' -or $null -eq $signature.SignerCertificate -or $signature.SignerCertificate.Subject -notmatch '(^|,\s*)O=Microsoft Corporation(,|$)') {
@@ -127,7 +146,7 @@ function Get-NativeRepairPlan {
             $action = 'ReplaceRecognized'
         }
     }
-    [pscustomobject]@{ Action = $action; ModPath = $mod; SystemPath = $systemCopy; OriginalModHash = $oldModHash; OriginalSystemHash = $oldSystemHash; OriginalNativeRecord = $originalNativeRecord; BackupMod = $null; BackupSystem = $null; InstalledHash = $null; InstalledSystemHash = $null }
+    [pscustomobject]@{ Action = $action; ModPath = $mod; SystemPath = $systemCopy; HelperPath = $helper; OriginalModHash = $oldModHash; OriginalSystemHash = $oldSystemHash; OriginalHelperHash = $oldHelperHash; OriginalNativeRecord = $originalNativeRecord; BackupMod = $null; BackupSystem = $null; BackupHelper = $null; InstalledHash = $null; InstalledSystemHash = $null; InstalledHelperHash = $null }
 }
 function Get-ManeaterRepairPlan {
     [CmdletBinding()]
@@ -156,6 +175,8 @@ function Test-ManeaterRepairState {
         if(-not $game.TestedBuild -and ($null -eq $Journal.PSObject.Properties['UntestedBuildOptIn'] -or -not $Journal.UntestedBuildOptIn)){throw 'This untested executable has no recorded opt-in.'}
         if ((Get-RepairHash (Join-Path $game.Bin 'dxgi.dll')) -cne $Journal.Plan.Native.InstalledHash -or
             (Get-RepairHash (Join-Path $game.Bin 'dxgi_codex_system.dll')) -cne $Journal.Plan.Native.InstalledSystemHash) { throw 'The native mod files changed or were removed.' }
+        if ($null -eq $Journal.Plan.Native.PSObject.Properties['InstalledHelperHash'] -or
+            (Get-RepairHash (Join-Path $game.Bin 'ManeaterAreaHelper.exe')) -cne $Journal.Plan.Native.InstalledHelperHash) { throw 'The native helper is missing, changed, or belongs to an older setup. Restore, then apply this preview.' }
         if ((Get-VerifiedWindowsDxgi).Table.FileSHA256 -cne $Journal.Plan.Native.InstalledSystemHash) { throw 'Windows updated its DXGI library.' }
         $context=Get-SteamFixContext -Context $Journal.Plan.SteamContext
         Assert-SteamManeaterInstallation -Context $context -GameRoot $game.GameRoot | Out-Null
@@ -183,16 +204,25 @@ function Restore-NativeRepair {
     param($Journal)
     $native = $Journal.Plan.Native
     if ($native.Action -eq 'None') { return }
+    $hasHelper = $null -ne $native.PSObject.Properties['HelperPath']
     $bin = [IO.Path]::GetFullPath([string]$Journal.Plan.Game.Bin).TrimEnd('\')
     if ($bin -notmatch '\\Maneater\\Binaries\\Win64$' -or
         $native.ModPath -ine (Join-Path $bin 'dxgi.dll') -or $native.SystemPath -ine (Join-Path $bin 'dxgi_codex_system.dll') -or
         $native.InstalledHash -notmatch '^[0-9A-Fa-f]{64}$' -or $native.InstalledSystemHash -notmatch '^[0-9A-Fa-f]{64}$') { throw 'Invalid native restore paths or ownership hashes.' }
+    if ($hasHelper -and ($native.HelperPath -ine (Join-Path $bin 'ManeaterAreaHelper.exe') -or $native.InstalledHelperHash -cnotmatch '^[0-9A-F]{64}$')) { throw 'Invalid helper restore path or ownership hash.' }
     $backupRoot = [IO.Path]::GetFullPath((Join-Path $script:Root '.local\backups')).TrimEnd('\') + '\'
     $backup = [IO.Path]::GetFullPath([string]$Journal.BackupDirectory)
     if (-not $backup.StartsWith($backupRoot,[StringComparison]::OrdinalIgnoreCase) -or
         $native.BackupMod -ine (Join-Path $backup 'previous-dxgi.dll') -or $native.BackupSystem -ine (Join-Path $backup 'previous-system-dxgi.dll')) { throw 'Invalid native backup directory.' }
+    if ($hasHelper -and $native.BackupHelper -ine (Join-Path $backup 'previous-ManeaterAreaHelper.exe')) { throw 'Invalid helper backup path.' }
+    $backups = @(@{Target=$native.ModPath;Backup=$native.BackupMod;Hash=$native.OriginalModHash},@{Target=$native.SystemPath;Backup=$native.BackupSystem;Hash=$native.OriginalSystemHash})
+    if ($hasHelper) { $backups += @{Target=$native.HelperPath;Backup=$native.BackupHelper;Hash=$native.OriginalHelperHash} }
     if ($native.Action -eq 'ReplaceRecognized') {
-        foreach ($entry in @(@{Target=$native.ModPath;Backup=$native.BackupMod;Hash=$native.OriginalModHash},@{Target=$native.SystemPath;Backup=$native.BackupSystem;Hash=$native.OriginalSystemHash})) {
+        foreach ($entry in $backups) {
+            if ($null -eq $entry.Hash) {
+                if ([IO.File]::Exists($entry.Backup)) { throw 'Unexpected helper backup was preserved.' }
+                continue
+            }
             if ([IO.File]::Exists($entry.Backup)) {
                 if ((Get-RepairHash $entry.Backup) -cne $entry.Hash) { throw 'Native backup changed; preserving the current installation.' }
             } elseif (-not [IO.File]::Exists($entry.Target) -or (Get-RepairHash $entry.Target) -cne $entry.Hash) { throw 'Native backup is missing; preserving the current installation.' }
@@ -201,20 +231,27 @@ function Restore-NativeRepair {
     $statePath = Join-Path $script:Root '.local\installation.json'
     $originalRecord = $(if ($null -ne $native.PSObject.Properties['OriginalNativeRecord']) { $native.OriginalNativeRecord } else { $null })
     if ($null -ne $originalRecord -and ($native.Action -ne 'ReplaceRecognized' -or $originalRecord.Status -ne 'installed' -or
-        $originalRecord.SchemaVersion -notin @(1,2) -or $originalRecord.GameDirectory -ine $bin -or
+        $originalRecord.SchemaVersion -notin @(1,2,3) -or $originalRecord.GameDirectory -ine $bin -or
         $originalRecord.ModSHA256 -cne $native.OriginalModHash -or $originalRecord.SystemSHA256 -cne $native.OriginalSystemHash)) { throw 'Original native installation record does not match the saved pair.' }
+    if ($null -ne $originalRecord -and $hasHelper) {
+        $originalHelper = $(if ($originalRecord.SchemaVersion -eq 3) { $originalRecord.HelperSHA256 } else { $null })
+        if ($originalHelper -cne $native.OriginalHelperHash) { throw 'Original helper ownership does not match its backup.' }
+    }
     $state = $null
     if ([IO.File]::Exists($statePath)) {
         $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
         $matchesOriginal = $null -ne $originalRecord -and
             ($state | ConvertTo-Json -Depth 30 -Compress) -ceq ($originalRecord | ConvertTo-Json -Depth 30 -Compress)
         $matchesNew = $state.GameDirectory -ieq $bin -and $state.ModSHA256 -ceq $native.InstalledHash -and $state.SystemSHA256 -ceq $native.InstalledSystemHash
+        if ($hasHelper) { $matchesNew = $matchesNew -and $state.SchemaVersion -eq 3 -and $state.HelperSHA256 -ceq $native.InstalledHelperHash }
+        elseif ($state.SchemaVersion -eq 3) { $matchesNew = $false }
         if ($matchesNew -and $null -ne $state.PSObject.Properties['GameSHA256']) { $matchesNew = $state.GameSHA256 -ceq $Journal.Plan.Game.GameSHA256 }
         if (-not $matchesOriginal -and -not $matchesNew) { throw 'Native installation record changed; preserving it and the current files.' }
     }
     # Recover a terminated install even if it stopped before the native record
-    # was committed. Only the two exact hashes in the write-ahead plan qualify.
+    # was committed. Only the exact tuple hashes in the write-ahead plan qualify.
     $owned = @(@{Path=$native.ModPath;Hash=$native.InstalledHash;Original=$native.OriginalModHash},@{Path=$native.SystemPath;Hash=$native.InstalledSystemHash;Original=$native.OriginalSystemHash})
+    if ($hasHelper) { $owned += @{Path=$native.HelperPath;Hash=$native.InstalledHelperHash;Original=$native.OriginalHelperHash} }
     foreach ($entry in $owned) {
         if ([IO.File]::Exists($entry.Path)) {
             $hash = Get-RepairHash $entry.Path
@@ -231,12 +268,22 @@ function Restore-NativeRepair {
         }
     }
     if ($native.Action -eq 'ReplaceRecognized') {
-        foreach ($entry in @(@{ Target=$native.ModPath; Backup=$native.BackupMod; Hash=$native.OriginalModHash }, @{ Target=$native.SystemPath; Backup=$native.BackupSystem; Hash=$native.OriginalSystemHash })) {
+        foreach ($entry in $backups) {
+            if ($null -eq $entry.Hash) {
+                if ([IO.File]::Exists($entry.Target)) { throw 'A helper created by another tool was preserved.' }
+                continue
+            }
             if ([IO.File]::Exists($entry.Target)) {
                 if ((Get-RepairHash $entry.Target) -cne $entry.Hash) { throw 'Native restore preserved a file that changed after installation.' }
             } elseif ([IO.File]::Exists($entry.Backup)) {
                 if ((Get-RepairHash $entry.Backup) -cne $entry.Hash) { throw 'Native backup changed; it was preserved.' }
-                [IO.File]::Copy($entry.Backup, $entry.Target, $false)
+                $staged = Join-Path $bin ('native-restore-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+                try {
+                    [IO.File]::Copy($entry.Backup, $staged, $false)
+                    if ((Get-RepairHash $staged) -cne $entry.Hash) { throw 'Staged native backup changed; nothing published.' }
+                    # PREVIEW_BEFORE_RESTORE_PUBLISH
+                    [IO.File]::Move($staged, $entry.Target)
+                } finally { if ([IO.File]::Exists($staged)) { [IO.File]::Delete($staged) } }
             } else { throw 'Native backup is missing; manual recovery is required.' }
         }
     }
@@ -307,22 +354,32 @@ function Invoke-ManeaterRepair {
     $build = Get-Content -LiteralPath (Join-Path $script:Root 'dist\build.json') -Raw | ConvertFrom-Json
     $plan.Native.InstalledHash = $(if($plan.Native.Action -eq 'None'){$plan.Native.OriginalModHash}else{$build.ModSHA256})
     $plan.Native.InstalledSystemHash = $(if($plan.Native.Action -eq 'None'){$plan.Native.OriginalSystemHash}else{(Get-VerifiedWindowsDxgi).Table.FileSHA256})
+    $plan.Native.InstalledHelperHash = $(if($plan.Native.Action -eq 'None'){$plan.Native.OriginalHelperHash}else{$build.HelperSHA256})
     $backup = Join-Path $script:Root ('.local\backups\' + [Guid]::NewGuid().ToString('N'))
     [IO.Directory]::CreateDirectory($backup) | Out-Null
     $plan.Native.BackupMod = Join-Path $backup 'previous-dxgi.dll'
     $plan.Native.BackupSystem = Join-Path $backup 'previous-system-dxgi.dll'
+    $plan.Native.BackupHelper = Join-Path $backup 'previous-ManeaterAreaHelper.exe'
     $warnings=@();if(-not $plan.Game.TestedBuild){$warnings+='Untested game build: native FPS activation depends on runtime compatibility checks.'};if(Test-RepairAnselSkipped $plan){$warnings+='Unrecognized Ansel SDK preserved; Ansel change skipped.'}
     $journal = [pscustomobject]@{ SchemaVersion=1; Status='applying'; Plan=$plan; UntestedBuildOptIn=(-not $plan.Game.TestedBuild -and [bool]$AllowUntestedBuild); BackupDirectory=$backup; SteamRecord=$null; Errors=@(); Warnings=$warnings; StartedUTC=[DateTime]::UtcNow.ToString('o') }
     Write-RepairJson $statePath $journal
     try {
-        & $Progress 'Installing the native FPS correction...'
+        & $Progress 'Installing the combined native fixes...'
         if ($plan.Native.Action -eq 'ReplaceRecognized') {
-            foreach ($entry in @(@{ Target=$plan.Native.ModPath; Backup=$plan.Native.BackupMod; Hash=$plan.Native.OriginalModHash }, @{ Target=$plan.Native.SystemPath; Backup=$plan.Native.BackupSystem; Hash=$plan.Native.OriginalSystemHash })) {
+            $previousFiles = @(@{ Target=$plan.Native.ModPath; Backup=$plan.Native.BackupMod; Hash=$plan.Native.OriginalModHash }, @{ Target=$plan.Native.SystemPath; Backup=$plan.Native.BackupSystem; Hash=$plan.Native.OriginalSystemHash })
+            if ($null -ne $plan.Native.OriginalHelperHash) { $previousFiles += @{Target=$plan.Native.HelperPath;Backup=$plan.Native.BackupHelper;Hash=$plan.Native.OriginalHelperHash} }
+            elseif ([IO.File]::Exists($plan.Native.HelperPath)) { throw 'A foreign helper appeared during preparation; it was preserved.' }
+            foreach ($entry in $previousFiles) {
                 if ((Get-RepairHash $entry.Target) -cne $entry.Hash) { throw 'Existing native mod changed during preparation.' }
-                [IO.File]::Copy($entry.Target, $entry.Backup, $false)
-                if ((Get-RepairHash $entry.Backup) -cne $entry.Hash) { throw 'Native backup verification failed.' }
+                $staged = Join-Path $backup ('native-backup-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+                try {
+                    [IO.File]::Copy($entry.Target, $staged, $false)
+                    if ((Get-RepairHash $staged) -cne $entry.Hash) { throw 'Native backup verification failed.' }
+                    # PREVIEW_BEFORE_BACKUP_PUBLISH
+                    [IO.File]::Move($staged, $entry.Backup)
+                } finally { if ([IO.File]::Exists($staged)) { [IO.File]::Delete($staged) } }
             }
-            foreach ($entry in @(@{ Target=$plan.Native.ModPath; Hash=$plan.Native.OriginalModHash }, @{ Target=$plan.Native.SystemPath; Hash=$plan.Native.OriginalSystemHash })) {
+            foreach ($entry in $previousFiles) {
                 if ((Get-RepairHash $entry.Target) -cne $entry.Hash) { throw 'Existing mod changed; preserving it.' }
                 [IO.File]::Delete($entry.Target)
             }

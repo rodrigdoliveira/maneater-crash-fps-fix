@@ -1,0 +1,7 @@
+MinHook trampoline allocator/relocator
+Upstream: https://github.com/TsudaKageyu/minhook
+Tag: v1.3.4
+Commit: c3fcafdc10146beb5919319d0683e44e3c30d537
+Only buffer.c, trampoline.c, hde64.c and required headers are compiled.
+The standard hook.c thread-freezing implementation is not used.
+License: vendor/minhook/LICENSE.txt (BSD 2-clause; bundled HDE notices retained).

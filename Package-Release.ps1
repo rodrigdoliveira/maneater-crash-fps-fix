@@ -6,18 +6,13 @@ if(-not [Environment]::Is64BitProcess -or [Environment]::OSVersion.Platform -ne 
 $root=[IO.Path]::GetFullPath($PSScriptRoot)
 Import-Module (Join-Path $root 'scripts\PeExports.psm1') -Force
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$sourceAllowlist=@(
-    '.gitattributes','.gitignore','README.md','LICENSE','CONTRIBUTING.md',
-    'Start.cmd','Launcher.ps1','Manage-Mod.ps1','build.ps1','Package-Release.ps1',
-    'docs/crash-workarounds.md','src/maneater_fps_hook.c',
-    'scripts/AnselFix.psm1','scripts/Compiler.psm1','scripts/CpuPlan.psm1',
-    'scripts/PeExports.psm1','scripts/Repair.psm1','scripts/Run-Repair.ps1','scripts/SteamFix.psm1',
-    'tests/Run-All.ps1','tests/native_fps_contract_fixture.c','tests/test_ansel.ps1',
-    'tests/test_compiler.ps1','tests/test_cpu_plan.ps1','tests/test_launcher.ps1',
-    'tests/test_repair.ps1','tests/test_release.ps1','tests/test_scripts.ps1','tests/test_steam.ps1'
-)
-$provenanceFiles=@('src/maneater_fps_hook.c','scripts/PeExports.psm1','build.ps1','Manage-Mod.ps1')
-$artifacts=@('dxgi.dll','build.json','dxgi_proxy.def')
+$sourceAllowlist=@((Get-Content -LiteralPath (Join-Path $root 'release-files.json') -Raw | ConvertFrom-Json).SourceFiles)
+if (-not $sourceAllowlist.Count -or @($sourceAllowlist | Select-Object -Unique).Count -ne $sourceAllowlist.Count) { throw 'Invalid release source allowlist.' }
+foreach ($name in $sourceAllowlist) {
+    if ($name -match '(^/|\\|(^|/)\.\.(/|$)|:|(^|/)(\.git|\.local|dist|cache)(/|$))' -or $name -match '\.(dll|exe|pdb|etl|csv|sav|log)$') { throw 'Unsafe release source path.' }
+}
+$provenanceFiles=@($sourceAllowlist | Where-Object { $_ -match '^(src|vendor)/' })+@('scripts/PeExports.psm1','build.ps1','Manage-Mod.ps1')
+$artifacts=@('dxgi.dll','ManeaterAreaHelper.exe','build.json','dxgi_proxy.def')
 $dist=Join-Path $root 'dist'
 $tempPrefix=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')+'\'
 if([string]::IsNullOrWhiteSpace($OutputPath)){$OutputPath=Join-Path $dist 'Maneater-Crash-FPS-Fix.zip'}
@@ -95,8 +90,12 @@ try{
     $payloadDist=Join-Path $payload 'dist';[IO.Directory]::CreateDirectory($payloadDist)|Out-Null
     foreach($name in $artifacts){[IO.File]::WriteAllBytes((Join-Path $payloadDist $name),[IO.File]::ReadAllBytes((Join-Path $dist $name)))}
     $manifest=Get-Content -LiteralPath (Join-Path $payloadDist 'build.json') -Raw|ConvertFrom-Json
-    if($manifest.SchemaVersion -ne 1 -or $manifest.Version -cne '0.2' -or $manifest.TargetFPS -ne 120 -or
-        $manifest.GameSHA256 -cne 'CC34E43BBD1F757E3883ADAF37D643C1A0FB2963967CA33AF7CB6CB8F54480C0'){throw 'Prebuilt manifest does not describe the reviewed native v0.2 build.'}
+    if($manifest.SchemaVersion -ne 1 -or $manifest.Version -cne '0.7.0-preview.1' -or $manifest.TargetFPS -ne 120 -or
+        $manifest.GameSHA256 -cne 'CC34E43BBD1F757E3883ADAF37D643C1A0FB2963967CA33AF7CB6CB8F54480C0'){throw 'Prebuilt manifest does not describe the local preview build.'}
+    if ($manifest.HelperSHA256 -cnotmatch '^[0-9A-F]{64}$' -or (Release-Hash (Join-Path $payloadDist 'ManeaterAreaHelper.exe')) -cne $manifest.HelperSHA256) { throw 'Companion helper hash differs from manifest.' }
+    $helperHeader=[IO.File]::ReadAllText((Join-Path $payload 'src/nav_helper_hash.h'))
+    $helperBytes=([regex]::Matches($helperHeader,'0x([0-9a-fA-F]{2})') | ForEach-Object { $_.Groups[1].Value }) -join ''
+    if ($helperBytes -ine $manifest.HelperSHA256) { throw 'Native source embeds a different companion helper hash.' }
     if(@($manifest.SourceHashes.PSObject.Properties).Count -ne $provenanceFiles.Count){throw 'Unexpected build source provenance set.'}
     foreach($relative in $provenanceFiles){
         $property=$manifest.SourceHashes.PSObject.Properties[$relative]
@@ -115,9 +114,12 @@ try{
     $system=Get-VerifiedWindowsDxgi
     Assert-DxgiForwarderTable -Proxy $proxy -System $system.Table
     $imports=@(Get-ReleaseImports (Join-Path $payloadDist 'dxgi.dll'))
-    $allowedImports=@('kernel32.dll','api-ms-win-crt-runtime-l1-1-0.dll','api-ms-win-crt-stdio-l1-1-0.dll','api-ms-win-crt-heap-l1-1-0.dll','api-ms-win-crt-string-l1-1-0.dll')
-    if('kernel32.dll' -notin $imports -or @($imports|Select-Object -Unique).Count -ne $imports.Count){throw 'Native dependency set is missing Kernel32 or has duplicates.'}
-    foreach($name in $imports){if($name -cnotin $allowedImports){throw ('Unexpected native dependency: '+$name)}}
+    $helperImports=@(Get-ReleaseImports (Join-Path $payloadDist 'ManeaterAreaHelper.exe'))
+    $allowedImports=@('kernel32.dll','bcrypt.dll','api-ms-win-crt-runtime-l1-1-0.dll','api-ms-win-crt-stdio-l1-1-0.dll','api-ms-win-crt-heap-l1-1-0.dll','api-ms-win-crt-string-l1-1-0.dll','api-ms-win-crt-math-l1-1-0.dll','api-ms-win-crt-convert-l1-1-0.dll','api-ms-win-crt-locale-l1-1-0.dll','api-ms-win-crt-private-l1-1-0.dll','api-ms-win-crt-environment-l1-1-0.dll')
+    foreach ($set in @(@{Names=$imports},@{Names=$helperImports})) {
+        if('kernel32.dll' -notin $set.Names -or @($set.Names|Select-Object -Unique).Count -ne $set.Names.Count){throw 'Native dependency set is missing Kernel32 or has duplicates.'}
+        foreach($name in $set.Names){if($name -cnotin $allowedImports){throw ('Unexpected native dependency: '+$name)}}
+    }
     # Git's text normalization is appropriate for source. The batch entrypoint
     # needs CRLF in the ready package, without changing the committed source.
     $start=Join-Path $payload 'Start.cmd';$startBytes=[IO.File]::ReadAllBytes($start)
@@ -152,7 +154,7 @@ try{
     $zipHash=Release-Hash $readyZip
     if((Release-Hash $outputTemp) -cne $zipHash){throw 'Release ZIP copy verification failed.'}
     if([IO.File]::Exists($output)){[IO.File]::Replace($outputTemp,$output,[NullString]::Value)}else{[IO.File]::Move($outputTemp,$output)}
-    [pscustomobject]@{ZipPath=$output;SHA256=$zipHash;SourceCommit=$head;SourceTree=$tree;SourceFileCount=$sources.Count;NativeArtifactCount=$artifacts.Count;NativeExports=$proxy.Exports.Count;NativeImports=$imports}
+    [pscustomobject]@{Version='0.7.0-preview.1';ZipPath=$output;SHA256=$zipHash;SourceCommit=$head;SourceTree=$tree;SourceFileCount=$sources.Count;NativeArtifactCount=$artifacts.Count;NativeExports=$proxy.Exports.Count;NativeImports=$imports;HelperImports=$helperImports}
 }finally{
     if($null -ne $outputTemp -and [IO.File]::Exists($outputTemp)){[IO.File]::Delete($outputTemp)}
     if($null -ne $stage -and [IO.Directory]::Exists($stage)){

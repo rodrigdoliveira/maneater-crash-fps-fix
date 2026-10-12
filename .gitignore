@@ -6,6 +6,8 @@
 /zig-out/
 /tests/.tmp-*/
 /tests/.tmp/
+/tests/*-results.json
+/tests/*-result.json
 
 # Binaries and compiler/linker intermediates
 *.dll

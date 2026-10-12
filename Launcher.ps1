@@ -18,10 +18,10 @@ if(-not [string]::IsNullOrWhiteSpace($SteamContextPath)){
     $script:initialSteamContext=Get-Content -LiteralPath $contextFile -Raw|ConvertFrom-Json
 }
 $form = New-Object Windows.Forms.Form
-$form.Text = 'Maneater Crash & FPS Fix'
+$form.Text = 'Maneater Crash & FPS Fix - 0.7.0-preview.1 (local)'
 $form.StartPosition = 'CenterScreen'
-$form.ClientSize = New-Object Drawing.Size(860,660)
-$form.MinimumSize = New-Object Drawing.Size(820,700)
+$form.ClientSize = New-Object Drawing.Size(860,740)
+$form.MinimumSize = New-Object Drawing.Size(820,780)
 $form.Font = New-Object Drawing.Font('Segoe UI',10)
 $form.BackColor = [Drawing.Color]::FromArgb(246,248,251)
 $form.AutoScaleMode = 'Dpi'
@@ -32,26 +32,29 @@ $title.Font = New-Object Drawing.Font('Segoe UI',16,[Drawing.FontStyle]::Bold)
 $subtitle = Add-Label 'Maneater is detected automatically. You can also choose its executable. Your current visuals and saves are preserved.' 24 65 812 48
 $pathBox = New-Object Windows.Forms.TextBox; $pathBox.SetBounds(24,120,682,29); $pathBox.ReadOnly=$true; $pathBox.Anchor='Top,Left,Right'; $form.Controls.Add($pathBox)
 $browse = New-Object Windows.Forms.Button; $browse.Text='Choose game...'; $browse.SetBounds(720,117,116,34); $browse.Anchor='Top,Right'; $form.Controls.Add($browse)
-$list = New-Object Windows.Forms.ListView; $list.SetBounds(24,171,812,198); $list.View='Details'; $list.FullRowSelect=$true; $list.GridLines=$false; $list.HeaderStyle='Nonclickable'; $list.ShowItemToolTips=$true; $list.Anchor='Top,Left,Right'; $form.Controls.Add($list)
+$list = New-Object Windows.Forms.ListView; $list.SetBounds(24,171,812,258); $list.View='Details'; $list.FullRowSelect=$true; $list.GridLines=$false; $list.HeaderStyle='Nonclickable'; $list.ShowItemToolTips=$true; $list.Anchor='Top,Left,Right'; $form.Controls.Add($list)
 $list.Columns.Add('Fix',174) | Out-Null; $list.Columns.Add('Status',112) | Out-Null; $list.Columns.Add('What it changes',496) | Out-Null
 function Set-FixRow { param([string]$Name,[string]$Status,[string]$Detail) $item=New-Object Windows.Forms.ListViewItem($Name); $item.SubItems.Add($Status)|Out-Null; $item.SubItems.Add($Detail)|Out-Null; $item.ToolTipText=$Detail; $list.Items.Add($item)|Out-Null }
 function Show-DefaultRows {
     $list.Items.Clear()
     Set-FixRow 'Native FPS fix' 'Waiting' 'Installs the included mod; compatible engine calls redirect 60 FPS to 120 FPS.'
+    Set-FixRow 'Character recovery' 'Preview' 'Avoids repeated recovery-animation evaluation on the guarded path.'
+    Set-FixRow 'Navigation' 'Preview' 'Filters impossible connections while preserving native navigation results.'
+    Set-FixRow 'Package loading' 'Preview' 'Removes unused temporary string work; original loading remains in control.'
     Set-FixRow 'OpenSSL crash fix' 'Waiting' 'Sets the official compatibility flag for Maneater only.'
     Set-FixRow 'CPU scheduling' 'Detecting' 'Chooses performance cores and worker count where applicable.'
     Set-FixRow 'Ansel' 'Waiting' 'Disables the bundled photo-mode SDK; restore is available.'
     Set-FixRow 'Steam overlay' 'Waiting' 'Disables the overlay for Maneater only.'
 }
 Show-DefaultRows
-$untested = New-Object Windows.Forms.CheckBox; $untested.Text='Allow an untested build (experimental)'; $untested.SetBounds(24,382,650,24); $untested.Enabled=$false; $untested.Checked=-not $DisallowUntestedBuild; $form.Controls.Add($untested)
-$status = Add-Label 'Select Maneater.exe or Maneater-Win64-Shipping.exe to get started.' 24 418 812 48
+$untested = New-Object Windows.Forms.CheckBox; $untested.Text='Allow an untested build (experimental)'; $untested.SetBounds(24,442,650,24); $untested.Enabled=$false; $untested.Checked=-not $DisallowUntestedBuild; $form.Controls.Add($untested)
+$status = Add-Label 'Select Maneater.exe or Maneater-Win64-Shipping.exe to get started.' 24 478 812 48
 $status.Font = New-Object Drawing.Font('Segoe UI',10,[Drawing.FontStyle]::Bold)
-$bar = New-Object Windows.Forms.ProgressBar; $bar.SetBounds(24,482,812,7); $bar.Style='Blocks'; $bar.Anchor='Bottom,Left,Right'; $form.Controls.Add($bar)
-$apply = New-Object Windows.Forms.Button; $apply.Text='Apply all fixes'; $apply.SetBounds(24,514,190,42); $apply.BackColor=[Drawing.Color]::FromArgb(20,98,155); $apply.ForeColor=[Drawing.Color]::White; $apply.FlatStyle='Flat'; $apply.Enabled=$false; $apply.Anchor='Bottom,Left'; $form.Controls.Add($apply)
-$play = New-Object Windows.Forms.Button; $play.Text='Play Maneater'; $play.SetBounds(230,514,180,42); $play.Enabled=$false; $play.Anchor='Bottom,Left'; $form.Controls.Add($play)
-$restore = New-Object Windows.Forms.Button; $restore.Text='Restore previous setup'; $restore.SetBounds(590,514,246,42); $restore.Enabled=$false; $restore.Anchor='Bottom,Right'; $form.Controls.Add($restore)
-$note = Add-Label 'The ready-to-run ZIP includes the compiled FPS mod; no compiler download is needed. Keep this folder for Restore. Installed means files/settings are saved; FPS checks run at game startup.' 24 573 812 60
+$bar = New-Object Windows.Forms.ProgressBar; $bar.SetBounds(24,542,812,7); $bar.Style='Blocks'; $bar.Anchor='Bottom,Left,Right'; $form.Controls.Add($bar)
+$apply = New-Object Windows.Forms.Button; $apply.Text='Apply all fixes'; $apply.SetBounds(24,574,190,42); $apply.BackColor=[Drawing.Color]::FromArgb(20,98,155); $apply.ForeColor=[Drawing.Color]::White; $apply.FlatStyle='Flat'; $apply.Enabled=$false; $apply.Anchor='Bottom,Left'; $form.Controls.Add($apply)
+$play = New-Object Windows.Forms.Button; $play.Text='Play Maneater'; $play.SetBounds(230,574,180,42); $play.Enabled=$false; $play.Anchor='Bottom,Left'; $form.Controls.Add($play)
+$restore = New-Object Windows.Forms.Button; $restore.Text='Restore previous setup'; $restore.SetBounds(590,574,246,42); $restore.Enabled=$false; $restore.Anchor='Bottom,Right'; $form.Controls.Add($restore)
+$note = Add-Label 'Local preview: includes compiled mod and helper; no compiler download. New patches have offline checks but need gameplay validation. Installed means files are present; activation is checked at startup. Keep this folder for Restore.' 24 633 812 72
 $note.Anchor='Bottom,Left,Right'; $note.ForeColor=[Drawing.Color]::FromArgb(74,86,101)
 
 function Get-SavedRepair {
@@ -79,6 +82,10 @@ function Start-RepairWorker {
 function Show-Plan { param($Plan)
     $script:plan=$Plan; $list.Items.Clear()
     Set-FixRow 'Native FPS fix' $(if($Plan.Native.Action -eq 'None'){'Installed'}else{'Ready'}) 'Activation is checked at game startup; incompatible engine layouts pass through.'
+    $previewState=$(if(Test-SelectedBuildTested){if($Plan.Native.Action -eq 'None'){'Installed'}else{'Ready'}}else{'Guarded'})
+    Set-FixRow 'Character recovery' $previewState 'Experimental recovery-animation fast path; exact-build guards required.'
+    Set-FixRow 'Navigation' $previewState 'Experimental scoped connection filter; uncertain queries use original code.'
+    Set-FixRow 'Package loading' $previewState 'Experimental unused-label removal; original package-loading order preserved.'
     Set-FixRow 'OpenSSL crash fix' 'Ready' 'Official flag applied through this game''s Steam launch options.'
     Set-FixRow 'CPU scheduling' $(if($Plan.Cpu.Apply){'Ready'}else{'Not needed'}) $Plan.Cpu.Description
     if($null -ne $Plan.PSObject.Properties['AnselDisposition'] -and $Plan.AnselDisposition -eq 'SkippedUnknownSDK'){Set-FixRow 'Ansel' 'Skipped' 'Unrecognized SDK preserved; this change will not be applied.'}
@@ -164,12 +171,12 @@ $timer.Add_Tick({
             if ($AutoApply) { $script:AutoApply=$false; if((Request-ExperimentalTrial)-and (Request-SteamExit)){Start-RepairWorker 'Apply'} }
         } elseif ($script:action -eq 'Verify') {
             $apply.Enabled=$false
-            if($result.Result.Valid){$status.Text=$(if(Test-SelectedBuildTested){'Setup is installed. FPS activation is checked when Maneater starts.'}else{'Experimental setup is installed. FPS may remain inactive if engine checks fail.'});$play.Enabled=$true;foreach($row in $list.Items){if($row.SubItems[1].Text -eq 'Ready'){$row.SubItems[1].Text=$(if($row.Text -eq 'Native FPS fix'){'Installed'}else{'Applied'})}}}
+            if($result.Result.Valid){$status.Text=$(if(Test-SelectedBuildTested){'Setup is installed. FPS activation is checked when Maneater starts.'}else{'Experimental setup is installed. FPS may remain inactive if engine checks fail.'});$play.Enabled=$true;foreach($row in $list.Items){if($row.SubItems[1].Text -eq 'Ready'){$row.SubItems[1].Text=$(if($row.Text -in @('Native FPS fix','Character recovery','Navigation','Package loading')){'Installed'}else{'Applied'})}}}
             else{$status.Text='The setup changed: '+$result.Result.Reason+' Use Restore, then apply again.'}
         } elseif ($script:action -eq 'Apply') {
             $script:plan=$result.Result.Plan
             $status.Text=$(if(Test-SelectedBuildTested){'Setup installed. Play Maneater; FPS activation is checked at startup.'}else{'Experimental setup installed. FPS may remain inactive if engine checks fail.'}); $play.Enabled=$true; $apply.Enabled=$false
-            foreach($row in $list.Items){if($row.SubItems[1].Text -eq 'Ready'){$row.SubItems[1].Text=$(if($row.Text -eq 'Native FPS fix'){'Installed'}else{'Applied'})}}
+            foreach($row in $list.Items){if($row.SubItems[1].Text -eq 'Ready'){$row.SubItems[1].Text=$(if($row.Text -in @('Native FPS fix','Character recovery','Navigation','Package loading')){'Installed'}else{'Applied'})}}
         } else { $status.Text=$(if(@($result.Result.Warnings).Count){'Restored our changes; kept settings you changed afterward.'}else{'Previous setup restored. You can apply the fixes again whenever you want.'}); Show-DefaultRows; $script:plan=$null; $apply.Enabled=$false; if(-not [string]::IsNullOrWhiteSpace($pathBox.Text)){Start-RepairWorker 'Plan'} }
     } catch { $status.Text=$_.Exception.Message; if($null -ne $script:worker -and $script:worker.HasExited){$script:worker.Dispose();$script:worker=$null;Set-Busy $false} }
 })

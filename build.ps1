@@ -29,7 +29,16 @@ try {
     $env:ZIG_LOCAL_CACHE_DIR = Join-Path $dist 'cache\local'
     $compilerVersion = (& $ZigPath version | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) { throw 'Could not read Zig version.' }
-    & $ZigPath cc -target x86_64-windows-gnu -shared -O2 -fno-omit-frame-pointer -Wall -Wextra -Werror $source $definition -o $temporary -lkernel32
+    $flags = @('cc','-target','x86_64-windows-gnu','-fms-extensions','-O2','-fno-omit-frame-pointer','-ffp-contract=off','-Wall','-Wextra','-Werror')
+    $helper = Join-Path $dist 'ManeaterAreaHelper.exe'
+    & $ZigPath @flags (Join-Path $root 'src/nav_install_external.c') -o $helper -municode -lbcrypt -lkernel32
+    if ($LASTEXITCODE -ne 0) { throw 'Attachment helper failed to build.' }
+    $helperHash = (Get-FileHash -LiteralPath $helper -Algorithm SHA256).Hash
+    $hexBytes = for ($i=0; $i -lt 64; $i+=2) { '0x'+$helperHash.Substring($i,2).ToLowerInvariant() }
+    $hashSource = "/* Generated from the helper built by this script. */`nstatic const unsigned char nav_expected_helper_sha[32]={" + ($hexBytes -join ',') + "};`n"
+    [IO.File]::WriteAllText((Join-Path $root 'src/nav_helper_hash.h'),$hashSource,[Text.UTF8Encoding]::new($false))
+    $sources = @($source) + @('vendor/minhook/src/buffer.c','vendor/minhook/src/trampoline.c','vendor/minhook/src/hde/hde64.c' | ForEach-Object { Join-Path $root $_ })
+    & $ZigPath @flags -shared @sources $definition -o $temporary -lkernel32 -lbcrypt
     if ($LASTEXITCODE -ne 0) { throw "Compilation failed with exit code $LASTEXITCODE." }
     $proxy = Get-PeExportTable -Path $temporary
     Assert-DxgiForwarderTable -Proxy $proxy -System $system.Table
@@ -39,21 +48,29 @@ try {
     if ($currentSystem.Table.FileSHA256 -cne $system.Table.FileSHA256) { throw 'Windows DXGI changed during compilation; rebuild.' }
     [IO.File]::Copy($temporary, $output, $true)
     $sourceHashes = [ordered]@{}
-    foreach ($relative in @('src/maneater_fps_hook.c', 'scripts/PeExports.psm1', 'build.ps1', 'Manage-Mod.ps1')) {
+    foreach ($folder in @('src','vendor')) {
+        foreach ($file in Get-ChildItem -LiteralPath (Join-Path $root $folder) -File -Recurse | Sort-Object FullName) {
+            $relative = $file.FullName.Substring($root.Length+1).Replace('\','/')
+            $sourceHashes[$relative] = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
+        }
+    }
+    foreach ($relative in @('scripts/PeExports.psm1', 'build.ps1', 'Manage-Mod.ps1')) {
         $sourceHashes[$relative] = (Get-FileHash -LiteralPath (Join-Path $root $relative) -Algorithm SHA256).Hash
     }
     $manifest = [ordered]@{
-        SchemaVersion = 1; Version = '0.2'; TargetFPS = 120
+        SchemaVersion = 1; Version = '0.7.0-preview.1'; TargetFPS = 120
         GameSHA256 = 'CC34E43BBD1F757E3883ADAF37D643C1A0FB2963967CA33AF7CB6CB8F54480C0'
         ModSHA256 = (Get-FileHash -LiteralPath $output -Algorithm SHA256).Hash
+        HelperSHA256 = $helperHash
         DefinitionSHA256 = (Get-FileHash -LiteralPath $definition -Algorithm SHA256).Hash
         SystemExportsSHA256 = $system.Table.ContractSHA256; ModExportsSHA256 = $proxy.ContractSHA256
         BuildSystemDLLSHA256 = $system.Table.FileSHA256; SystemExports = @($system.Table.Exports | Select-Object Name, Ordinal)
-        SourceHashes = $sourceHashes; Compiler = "Zig $compilerVersion; x86_64-windows-gnu O2 frame-pointer warnings-as-errors"
+        SourceHashes = $sourceHashes; Compiler = "Zig $compilerVersion; x86_64-windows-gnu O2; no FP contraction; warnings-as-errors"
+        NativeAttachmentVerified = $false; BenefitVerified = $false
         BuiltUTC = [DateTime]::UtcNow.ToString('o')
     }
     [IO.File]::WriteAllText((Join-Path $dist 'build.json'), ($manifest | ConvertTo-Json -Depth 6) + "`n", [Text.UTF8Encoding]::new($false))
-    [pscustomobject]@{ DLL = $output; SHA256 = $manifest.ModSHA256; ExportCount = $proxy.Exports.Count; Manifest = Join-Path $dist 'build.json' }
+    [pscustomobject]@{ DLL = $output; SHA256 = $manifest.ModSHA256; HelperSHA256 = $helperHash; ExportCount = $proxy.Exports.Count; Manifest = Join-Path $dist 'build.json' }
 } finally {
     $env:ZIG_GLOBAL_CACHE_DIR = $savedGlobalCache
     $env:ZIG_LOCAL_CACHE_DIR = $savedLocalCache

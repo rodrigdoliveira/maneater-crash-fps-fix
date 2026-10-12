@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Import-Module (Join-Path $root 'scripts\PeExports.psm1') -Force
-$testRoot = Join-Path $PSScriptRoot ('.tmp-' + [Guid]::NewGuid().ToString('N'))
+$testRoot = Join-Path ([IO.Path]::GetTempPath()) ('me-preview-scripts-' + [Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($testRoot) | Out-Null
 $passed = 0
 function Assert-Test { param([bool]$Condition, [string]$Message) if (-not $Condition) { throw "FAIL: $Message" }; $script:passed++ }
@@ -69,7 +69,8 @@ function Update-FixtureManifest {
     foreach ($relative in @('src/maneater_fps_hook.c', 'scripts/PeExports.psm1', 'build.ps1', 'Manage-Mod.ps1')) {
         $hashes[$relative] = (Get-FileHash -LiteralPath (Join-Path $Fixture $relative) -Algorithm SHA256).Hash
     }
-    $manifest = @{ SchemaVersion = 1; GameSHA256 = $GameHash; TargetFPS = 120; SourceHashes = $hashes
+    $manifest = @{ SchemaVersion = 1; Version = '0.7.0-preview.1'; GameSHA256 = $GameHash; TargetFPS = 120; SourceHashes = $hashes
+        HelperSHA256 = (Get-FileHash -LiteralPath (Join-Path $Fixture 'dist\ManeaterAreaHelper.exe')).Hash
         ModSHA256 = $proxy.FileSHA256; DefinitionSHA256 = (Get-FileHash -LiteralPath (Join-Path $Fixture 'dist\dxgi_proxy.def')).Hash
         SystemExportsSHA256 = $System.Table.ContractSHA256; ModExportsSHA256 = $proxy.ContractSHA256; SystemExports = @($System.Table.Exports | Select-Object Name, Ordinal) }
     [IO.File]::WriteAllText((Join-Path $Fixture 'dist\build.json'), ($manifest | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
@@ -103,7 +104,8 @@ try {
         Assert-Throws { Get-PeExportTable $bad } "$mutation corruption refused"
     }
     $coreHash = (Get-FileHash -LiteralPath (Join-Path $root 'src\maneater_fps_hook.c') -Algorithm SHA256).Hash
-    Assert-Test ($coreHash -ceq '27B875BD1890549C1AB28B554BE42CE584EA6658C354784402A45F75CC8BD5D9') 'intentional native v0.2 source matches the independently reviewed revision'
+    $build = Get-Content -LiteralPath (Join-Path $root 'dist\build.json') -Raw | ConvertFrom-Json
+    Assert-Test ($coreHash -ceq $build.SourceHashes.'src/maneater_fps_hook.c') 'packaged native core matches reviewed build provenance'
     Assert-Throws { & (Join-Path $root 'Manage-Mod.ps1') -Action Install } 'Install requires explicit game path'
     $status = & (Join-Path $root 'Manage-Mod.ps1') -Action Status
     Assert-Test ($status.PSObject.Properties.Name -contains 'StatePresent') 'Status is read-only without game path'
@@ -122,20 +124,22 @@ try {
     $managerText = [IO.File]::ReadAllText((Join-Path $root 'Manage-Mod.ps1')).Replace('CC34E43BBD1F757E3883ADAF37D643C1A0FB2963967CA33AF7CB6CB8F54480C0', $gameHash)
     $manager = Join-Path $fixture 'Manage-Mod.ps1'; [IO.File]::WriteAllText($manager, $managerText, [Text.UTF8Encoding]::new($false))
     New-FixturePe $system.Table.Exports (Join-Path $fixture 'dist\dxgi.dll') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $fixture 'dist\ManeaterAreaHelper.exe'),'inert helper fixture; never executed')
     New-DxgiForwarderDefinition $system.Table.Exports (Join-Path $fixture 'dist\dxgi_proxy.def')
     Update-FixtureManifest $fixture $gameHash $system
     & $manager -Action Install -GameDirectory (Join-Path $fixture 'game') -ExpectedGameSHA256 $gameHash | Out-Null
-    Assert-Test ([IO.File]::Exists((Join-Path $bin 'dxgi.dll')) -and [IO.File]::Exists((Join-Path $bin 'dxgi_codex_system.dll'))) 'fixture installation copies both validated files'
+    Assert-Test ([IO.File]::Exists((Join-Path $bin 'dxgi.dll')) -and [IO.File]::Exists((Join-Path $bin 'dxgi_codex_system.dll')) -and [IO.File]::Exists((Join-Path $bin 'ManeaterAreaHelper.exe'))) 'fixture installation copies the validated three-file tuple'
+    Assert-Test ((& $manager -Action Status).HelperPresent) 'status reports helper presence'
     $nativeStatePath = Join-Path $fixture '.local\installation.json'
     $nativeState = Get-Content -LiteralPath $nativeStatePath -Raw | ConvertFrom-Json
-    Assert-Test ($nativeState.SchemaVersion -eq 2 -and $nativeState.GameSHA256 -ceq $gameHash -and $nativeState.TestedBuild -and -not $nativeState.UntestedBuildOptIn) 'tested installation records actual hash and explicit build classification'
+    Assert-Test ($nativeState.SchemaVersion -eq 3 -and $nativeState.HelperSHA256 -ceq (Get-FileHash (Join-Path $bin 'ManeaterAreaHelper.exe')).Hash -and $nativeState.GameSHA256 -ceq $gameHash -and $nativeState.TestedBuild -and -not $nativeState.UntestedBuildOptIn) 'tested installation records helper hash and build classification'
     Assert-Throws { & $manager -Action Install -GameDirectory $bin } 'existing loader refused without overwrite'
     [IO.File]::WriteAllText((Join-Path $bin 'dxgi.dll'), 'Foreign replacement')
     Assert-Throws { & $manager -Action Uninstall } 'modified target preserved on uninstall'
     Assert-Test ([IO.File]::Exists((Join-Path $bin 'dxgi_codex_system.dll'))) 'uninstall validates both before removing either'
     [IO.File]::Copy((Join-Path $fixture 'dist\dxgi.dll'), (Join-Path $bin 'dxgi.dll'), $true)
     & $manager -Action Uninstall | Out-Null
-    Assert-Test (-not [IO.File]::Exists((Join-Path $bin 'dxgi.dll')) -and -not [IO.File]::Exists((Join-Path $bin 'dxgi_codex_system.dll'))) 'uninstall removes only owned fixture copies'
+    Assert-Test (-not [IO.File]::Exists((Join-Path $bin 'dxgi.dll')) -and -not [IO.File]::Exists((Join-Path $bin 'dxgi_codex_system.dll')) -and -not [IO.File]::Exists((Join-Path $bin 'ManeaterAreaHelper.exe'))) 'uninstall removes owned three-file tuple'
     & $manager -Action Uninstall | Out-Null; Assert-Test $true 'repeated uninstall is harmless'
     $unknownGame = [byte[]]$gameBytes.Clone(); $unknownGame[1023] = 1
     [IO.File]::WriteAllBytes($game, $unknownGame)
@@ -145,7 +149,7 @@ try {
     Assert-Test (-not [IO.File]::Exists((Join-Path $bin 'dxgi.dll')) -and -not [IO.File]::Exists((Join-Path $bin 'dxgi_codex_system.dll'))) 'untested rejection and hash mismatch make no copies'
     & $manager -Action Install -GameDirectory $bin -AllowUntestedBuild -ExpectedGameSHA256 $unknownHash | Out-Null
     $nativeState = Get-Content -LiteralPath $nativeStatePath -Raw | ConvertFrom-Json
-    Assert-Test ($nativeState.SchemaVersion -eq 2 -and $nativeState.GameSHA256 -ceq $unknownHash -and -not $nativeState.TestedBuild -and $nativeState.UntestedBuildOptIn) 'opted-in installation records actual untested game hash'
+    Assert-Test ($nativeState.SchemaVersion -eq 3 -and $nativeState.GameSHA256 -ceq $unknownHash -and -not $nativeState.TestedBuild -and $nativeState.UntestedBuildOptIn) 'opted-in installation records actual untested game hash'
     $unknownStatus = & $manager -Action Status
     Assert-Test ($unknownStatus.GameSHA256 -ceq $unknownHash -and -not $unknownStatus.TestedBuild -and $unknownStatus.UntestedBuildOptIn) 'untested status does not require repeated opt-in'
     [IO.File]::Delete($game)
@@ -160,6 +164,8 @@ try {
     Assert-Test ($legacyStatus.TestedBuild -and -not $legacyStatus.UntestedBuildOptIn) 'legacy schema1 tested record remains readable'
     & $manager -Action Uninstall | Out-Null
     Assert-Test (-not [IO.File]::Exists((Join-Path $bin 'dxgi.dll'))) 'legacy schema1 owned installation still uninstalls'
+    Assert-Test ([IO.File]::Exists((Join-Path $bin 'ManeaterAreaHelper.exe'))) 'legacy two-file record preserves untracked helper'
+    [IO.File]::Delete((Join-Path $bin 'ManeaterAreaHelper.exe'))
     foreach ($corruption in @('MZ','NTOffset','Machine','OptionalMagic','OptionalSize','Sections','HeaderSize','Entry','DLL')) {
         $badGame = [byte[]]$gameBytes.Clone()
         switch ($corruption) {
@@ -199,10 +205,28 @@ try {
     [IO.File]::WriteAllText($manager, $changedProxy, [Text.UTF8Encoding]::new($false)); Update-FixtureManifest $fixture $gameHash $system
     Assert-Throws { & $manager -Action Install -GameDirectory $bin } 'proxy replacement between initial hash and PE validation refused'
     Assert-Test (-not [IO.File]::Exists((Join-Path $bin 'dxgi.dll')) -and -not [IO.File]::Exists((Join-Path $bin 'dxgi_codex_system.dll'))) 'source replacement never copied into the fake game'
+
+    New-FixturePe $system.Table.Exports (Join-Path $fixture 'dist\dxgi.dll') | Out-Null
+    [IO.File]::WriteAllText($manager,$managerText,[Text.UTF8Encoding]::new($false)); Update-FixtureManifest $fixture $gameHash $system
+    $helperSource = Join-Path $fixture 'dist\ManeaterAreaHelper.exe'; $helperBytes = [IO.File]::ReadAllBytes($helperSource)
+    [IO.File]::Delete($helperSource)
+    Assert-Throws { & $manager -Action Install -GameDirectory $bin } 'missing packaged helper fails before publication'
+    Assert-Test (-not [IO.File]::Exists((Join-Path $bin 'dxgi.dll')) -and -not [IO.File]::Exists((Join-Path $bin 'ManeaterAreaHelper.exe'))) 'missing helper makes no tuple copies'
+    [IO.File]::WriteAllBytes($helperSource,$helperBytes)
+    $lateHelper=$managerText.Replace('# PREVIEW_BEFORE_HELPER_PUBLISH',"[IO.File]::WriteAllText(`$helperTarget,'late foreign helper')")
+    [IO.File]::WriteAllText($manager,$lateHelper,[Text.UTF8Encoding]::new($false));Update-FixtureManifest $fixture $gameHash $system
+    Assert-Throws { & $manager -Action Install -GameDirectory $bin } 'late foreign helper refuses absent-only publication'
+    Assert-Test ([IO.File]::ReadAllText((Join-Path $bin 'ManeaterAreaHelper.exe')) -ceq 'late foreign helper' -and -not [IO.File]::Exists((Join-Path $bin 'dxgi.dll')) -and -not [IO.File]::Exists((Join-Path $bin 'dxgi_codex_system.dll'))) 'late helper preserved while own partial tuple rolled back'
+    [IO.File]::Delete((Join-Path $bin 'ManeaterAreaHelper.exe'))
+    $lateOwner=$managerText.Replace('# PREVIEW_BEFORE_HELPER_PUBLISH',"[IO.File]::WriteAllText(`$statePath,'late foreign owner')")
+    [IO.File]::WriteAllText($manager,$lateOwner,[Text.UTF8Encoding]::new($false));Update-FixtureManifest $fixture $gameHash $system
+    Assert-Throws { & $manager -Action Install -GameDirectory $bin } 'changed native owner refuses final state publication'
+    Assert-Test ([IO.File]::ReadAllText($nativeStatePath) -ceq 'late foreign owner' -and -not [IO.File]::Exists((Join-Path $bin 'dxgi.dll')) -and -not [IO.File]::Exists((Join-Path $bin 'dxgi_codex_system.dll')) -and -not [IO.File]::Exists((Join-Path $bin 'ManeaterAreaHelper.exe'))) 'foreign owner preserved; all exact candidate copies rolled back'
+    Assert-Test (@(Get-ChildItem $bin -Filter 'native-*.tmp').Count -eq 0) 'failed publications leave no staged tuple files'
     "PASS: $passed PE, build-provenance, and scratch installer contracts. No game or DLL was executed."
 } finally {
     $resolvedRoot = [IO.Path]::GetFullPath($testRoot)
-    $intendedParent = [IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\') + '\'
-    if (-not $resolvedRoot.StartsWith($intendedParent, [StringComparison]::OrdinalIgnoreCase)) { throw 'Refusing cleanup outside the test directory.' }
+    $intendedParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+    if (-not $resolvedRoot.StartsWith($intendedParent, [StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetFileName($resolvedRoot) -notmatch '^me-preview-scripts-[0-9a-f]{32}$') { throw 'Refusing cleanup outside the owned test directory.' }
     if ([IO.Directory]::Exists($resolvedRoot)) { Remove-Item -LiteralPath $resolvedRoot -Recurse -Force }
 }
