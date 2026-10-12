@@ -71,7 +71,7 @@ The Ryzen approach aims to reduce competition between workers sharing physical c
 
 - **Platform:** Windows 10/11 x64, Steam edition of Maneater.
 - **Tested game build:** Steam build **7837297**.
-- **Tested hardware:** Intel Core **i9-13900K** PC.
+- **Tested hardware:** Intel Core **i9-13900K** with NVIDIA GeForce **RTX 4070**.
 - **AMD Ryzen:** CPU support is included, but has not been gameplay-tested on AMD hardware.
 
 You can try other builds with **Allow an untested build**, which is preselected. The launcher shows a warning, and fixes that fail their compatibility checks stay inactive. Epic and Game Pass versions have not been tested.
