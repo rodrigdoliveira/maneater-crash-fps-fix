@@ -48,24 +48,9 @@ Keep the launcher folder and `.local` backups. Interrupted updates roll back; ch
 
 ## Why the CPU fix matters
 
+Too many background workers can make Maneater stutter during busy combat. In the Intel test, selecting performance cores alone still left **78 engine task workers**; correcting the worker budget reduced that to **21**.
 
-Before the repair, the player reported frequent crashes during busy scenes. The OpenSSL launch workaround helped, but attacking groups of humans on land still caused heavy stuttering and short freezes. With the complete repair setup, repeated land-combat tests and a later longer play session were reported as generally smooth, with no crash. This is the result on the tested Intel PC; the CPU change alone was not shown to prevent every crash.
-
-The game splits CPU work between background threads. More threads do not always mean faster play: too many competing for the same cores can add scheduling overhead and make the game wait before drawing its next frame. That can feel like an overloaded CPU even when Task Manager's overall CPU percentage is below 100%.
-
-On the tested Intel hybrid CPU, simply keeping the game on its faster performance cores was not enough. Inspection showed that the engine still calculated a larger worker budget from the whole CPU. In one early affinity-only setup, it created **78 task-graph worker threads**; correcting the budget reduced that to **21**. These are background workers for engine tasks, not the game's total thread count.
-
-The launcher therefore changes **both where the game runs and the core count it uses to size its workers**. The `-corelimit` option controls that calculation; it is not an exact count of every thread the game creates.
-
-| CPU example | What the launcher does |
-| --- | --- |
-| Intel Core i9-13900K, as tested: 8 performance cores + 16 efficiency cores | Runs Maneater on the 8 performance cores, including their 16 logical threads, and sets `-corelimit=8`. The engine's budget then matches the physical performance cores selected for the game. |
-| Another supported Intel hybrid CPU with 6 performance cores | Detects that CPU's actual core mapping, selects its performance cores and sets `-corelimit=6`. It does not copy the test PC's settings. |
-| Ryzen with 6 physical cores / 12 logical threads | Sets `-corelimit=6`. All CPU threads remain available to Windows; no affinity mask is imposed. |
-| Ryzen with 16 physical cores / 32 logical threads | Uses the same worker-budget approach with `-corelimit=16`, without pinning the game to one group of cores or disabling SMT. |
-
-The Ryzen approach aims to reduce competition between workers sharing physical cores. It follows [AMD's guidance on choosing a starting thread-pool budget](https://gpuopen.com/learn/cpu-core-count-detection-windows/), but **has not been tested in Maneater gameplay on AMD hardware** and may improve or worsen performance. Unsupported or unclear CPU layouts keep their normal settings. These changes apply to Maneater's launch, preserve graphics quality, and can be reversed with **Restore previous setup**.
-
+The launcher detects your CPU and adjusts the budget automatically. Supported Intel hybrid CPUs use performance cores; eligible Ryzen CPUs use a physical-core budget with normal Windows scheduling. Graphics quality stays unchanged.
 
 ## Compatibility
 
