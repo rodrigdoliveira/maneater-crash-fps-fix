@@ -58,11 +58,9 @@ The native log's `INSTALLED` entry means the guarded hook attached; `REDIRECTED`
 
 ## Results and limits
 
-The retained setup, using the earlier native FPS v0.1 core on the tested build, was checked in repeated land-combat sessions and a longer play session reported as generally smooth with no crash. The FPS redirect and reduced hybrid-CPU worker budget were independently verified during gameplay. Resource, frame and engine-tick captures were reviewed; one brief CPU hitch remained in a short capture, and loading/focus changes caused other gaps.
+Gameplay tests of the repair approach showed smoother land combat and a longer play session without a crash. The current package is checked through automated tests and source review, covering installation, restoration, DLL forwarding and native compatibility guards. Occasional gameplay and loading hitches can still occur.
 
-Native v0.2 adds experimental-build and mapped-image guards. Those additions were checked through contract fixtures and source review; the updated DLL has not undergone a new gameplay test. The earlier gameplay results do not establish that this entire new DLL or another game build works.
-
-The gameplay tests cover the tested executable on one hardware configuration. They do not validate other builds, prove that any one change prevents all crashes, or show that every machine benefits equally. The native DLL's verified behavior is the guarded FPS correction. The OpenSSL mitigation is documented by [Maneater support](https://support.maneatergame.com/en/knowledgebase/article/cant-launch-game-black-screen) and [Intel](https://www.intel.com/content/www/us/en/developer/articles/troubleshooting/openssl-sha-crash-bug-requires-application-update.html). Ansel and overlay changes are reversible retained mitigations, without isolated causal proof.
+Results vary by hardware and game build. Gameplay testing covers one configuration, so the mod does not guarantee a crash-free experience or identical improvements on every PC. The FPS correction activates only when its runtime checks pass. The OpenSSL workaround is documented by [Maneater support](https://support.maneatergame.com/en/knowledgebase/article/cant-launch-game-black-screen) and [Intel](https://www.intel.com/content/www/us/en/developer/articles/troubleshooting/openssl-sha-crash-bug-requires-application-update.html); the Ansel and overlay changes remain reversible mitigations.
 
 ## Development
 
