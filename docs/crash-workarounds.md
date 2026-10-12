@@ -4,7 +4,7 @@ The [launcher in the README](../README.md) applies these changes together: the n
 
 The native DLL itself implements only the FPS correction. The advanced `Manage-Mod.ps1` installer also handles only that native mod; the GUI repair coordinates the other changes. The instructions below explain those changes and provide manual alternatives for people who do not use the GUI. They are not extra steps required after **Apply all fixes**.
 
-Short tests and a longer play session were crash-free with the combined setup. This does not identify which change prevented a crash, establish one common cause for earlier exceptions, or prove stability on other systems. None changes graphics-quality settings, console-variable configuration or saved games; Ansel and overlay features have the tradeoffs described below.
+Short tests and a longer play session were crash-free with the combined setup. This does not identify which change prevented a crash, establish one common cause for earlier exceptions, or prove stability on other systems. None changes graphics-quality settings, game configuration files or saved games; Ansel and overlay features have the tradeoffs described below.
 
 The [README compatibility section](../README.md#compatibility) identifies the executable used for the investigation. Recheck compatibility after a game update. Keep a record of existing launch options and file names before trying a step; compare the same gameplay conditions and restore a change if it causes problems.
 
