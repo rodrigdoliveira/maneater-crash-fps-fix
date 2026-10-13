@@ -21,22 +21,22 @@ The launcher may ask to close Steam briefly to save its per-game settings. If Wi
 
 ## What Apply all fixes does
 
-Applies the following fixes and optimizations with compatibility checks and backups:
+One click applies these fixes, with backups so you can undo the changes:
 
-| Fix | Applied behavior |
+| Fix | What it does |
 | --- | --- |
-| Native FPS correction | Redirects the guarded engine's 60 FPS request to 120 through its original setter. Other requests and graphics-quality settings are preserved. This does not guarantee 120 rendered frames per second. |
-| Human recovery animation | Streamlines one get-up animation lookup using the game's original animation selector and random-selection behavior. |
-| Navigation | Avoids unnecessary searches when connecting navigation data during area loading. Possible connections still use the game's original finder. |
-| Package loading | Removes unused temporary package-name string work while preserving the original loader's inputs and loading order. |
-| OpenSSL compatibility | Applies the existing OpenSSL compatibility flag through game-specific Steam launch options. |
-| CPU scheduling and worker budget | Uses detected hardware to choose the worker budget. Supported Intel hybrid CPUs also use performance-core affinity; eligible Ryzen SMT CPUs get a physical-core budget without an affinity mask. |
-| Ansel SDK | Reversibly disables the recognized bundled NVIDIA Ansel SDK, removing its photo-mode support. Unknown or already absent/disabled copies are preserved. |
-| Steam overlay | Turns off the overlay for Maneater only. |
+| Higher FPS | Raises the game's forced 60 FPS limit to 120 FPS. Your actual FPS still depends on your PC. |
+| Humans getting back up | Cuts unnecessary work when choosing how knocked-down humans get back up during combat. |
+| Preparing new areas | Reduces unnecessary work when preparing paths for characters in newly loaded areas. |
+| Loading game files | Removes unnecessary work while loading game data, without changing what gets loaded. |
+| Startup crashes and black screen | Addresses a known startup problem that can cause a crash or black screen on affected Intel PCs. |
+| CPU stuttering | Matches the game's background workload to your CPU to help reduce stuttering in busy scenes. Supports eligible Intel and Ryzen processors. |
+| NVIDIA photo mode | Disables NVIDIA Ansel as a stability precaution. Its photo mode will be unavailable while the fix is applied. |
+| Steam overlay | Turns off Steam's Shift+Tab overlay for Maneater to reduce possible conflicts. |
 
-The setup preserves graphics-quality settings and saves. Native optimizations activate only when their compatibility checks pass. Damage and collision events retain their original handling, and the stock executable and game archives are not edited on disk.
+Your graphics settings, saves and combat rules stay unchanged. Each fix checks compatibility before turning on, and **Restore previous setup** can undo the changes.
 
-A matching **ManeaterAreaHelper.exe** starts hidden during game startup, verifies the target and attaches the native entries, then exits. It is an attachment helper, not a gameplay profiler. The DLL/helper pair is verified together and included in the ZIP.
+The included helper runs briefly when Maneater starts to activate compatible fixes, then closes automatically.
 
 See [the release notes](docs/release-notes-0.8.0.md) for version history and validation details.
 
