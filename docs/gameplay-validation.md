@@ -1,4 +1,18 @@
-# v0.7.0 gameplay validation
+# Gameplay validation
+
+## v0.9.0 memory-check fix
+
+The tester played with the installed local memory-check fix and reported: "great that works!" The v0.9.0 release retains that runtime implementation, with release version labels and matching build metadata refreshed.
+
+The fix removes expensive memory-region scans from navigation snapshot reads and human recovery-animation input reads. Navigation uses bounded reads of the required data, with original layout/identity checks and fallback. Recovery keeps the original animation selector and write checks.
+
+The gameplay-tested local DLL SHA-256 was `06CF53D9174E600D9745C16EB4F51B50C5568B41D831A6A5E534BFC000BEB3CC`; its helper SHA-256 was `898C59D575AFF5DD9F6CDB0F46A2DEB5F1700DF80A5DDFE2A86AE1C71B1DCB7A`. The test used the reference Steam build 7837297 on an Intel Core i9-13900K with NVIDIA GeForce RTX 4070.
+
+This is positive feedback for the combined setup, rather than a timed FPS comparison. The rebuilt release DLL has a different hash; the packaged manifest records both the release hash and the tested local hash. It does not establish results on AMD hardware or other game builds.
+
+Automated tests cover inaccessible and guarded memory, partial reads and cleanup, original fallback, large navigation meshes, write checks, package verification and upgrade/restore. Raw recordings, private paths and game files are excluded from publication.
+
+## Earlier v0.7.0 validation
 
 The tester ran the v0.7.0-preview.1 package and reported: "they work great! i just tested it." The v0.7.0 release preserves those algorithms; version labels, log text, documentation and predecessor recognition were updated for publication.
 

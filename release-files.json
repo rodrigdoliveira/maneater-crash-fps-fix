@@ -1,5 +1,5 @@
 {
-  "Version": "0.8.0",
+  "Version": "0.9.0",
   "SourceFiles": [
     ".gitattributes",
     ".gitignore",
@@ -18,6 +18,7 @@
     "docs/gameplay-validation.md",
     "docs/release-notes-0.7.0.md",
     "docs/release-notes-0.8.0.md",
+    "docs/release-notes-0.9.0.md",
     "release-files.json",
     "scripts/AnselFix.psm1",
     "scripts/Compiler.psm1",
@@ -55,11 +56,13 @@
     "tests/run_nav_runtime_tests.ps1",
     "tests/run_nav_scope_tests.ps1",
     "tests/run_test_getup_core.ps1",
+    "tests/run_getup_snapshot_tests.ps1",
     "tests/test_ansel.ps1",
     "tests/test_bundle_upgrade.ps1",
     "tests/test_compiler.ps1",
     "tests/test_cpu_plan.ps1",
     "tests/test_getup_core.c",
+    "tests/test_getup_snapshot.c",
     "tests/test_launcher.ps1",
     "tests/test_loading_abi_probe.S",
     "tests/test_loading_runtime.c",

@@ -23,14 +23,14 @@ static wchar_t nav_mapping_name[160];
 
 static int nav_read_view(void *tile,NavTileView *v) {
     memset(v,0,sizeof(*v)); v->tile=tile;
-    return safe_read(tile,v->tile_copy,sizeof(v->tile_copy)) &&
-        safe_read((const void *)nav_ptr_at(v->tile_copy,8),v->header,sizeof(v->header)) && nav_layout(v);
+    return read_call_snapshot(tile,v->tile_copy,sizeof(v->tile_copy)) &&
+        read_call_snapshot((const void *)nav_ptr_at(v->tile_copy,8),v->header,sizeof(v->header)) && nav_layout(v);
 }
 static int nav_build_scope(NavScope *s,void *nav,void *source,void *target,uint32_t side) {
     unsigned char mesh[0xa8];
     if((side!=UINT32_MAX && !nav_cardinal_side(side)) ||
        !nav_read_view(target,&s->target) || s->target.npoly<256 || !nav_read_view(source,&s->source) ||
-       !nav_views_disjoint(&s->source,&s->target,nav) || !safe_read(nav,mesh,sizeof(mesh)))return 0;
+       !nav_views_disjoint(&s->source,&s->target,nav) || !read_call_snapshot(nav,mesh,sizeof(mesh)))return 0;
     uintptr_t tiles=nav_ptr_at(mesh,0x90);
     uint32_t max_tiles=nav_u32_at(mesh,0x30);
     if(!max_tiles || max_tiles>1048576U || !nav_span(tiles,(size_t)max_tiles*0xb0))return 0;
@@ -38,15 +38,19 @@ static int nav_build_scope(NavScope *s,void *nav,void *source,void *target,uint3
     if(a<tiles || b<tiles || (a-tiles)%0xb0 || (b-tiles)%0xb0 ||
        (a-tiles)/0xb0>=max_tiles || (b-tiles)/0xb0>=max_tiles)return 0;
     size_t sp=(size_t)s->source.npoly*sizeof(NavPoly),tp=(size_t)s->target.npoly*sizeof(NavPoly);
-    size_t tv=(size_t)s->target.nverts*sizeof(NavVertex),cap=(size_t)s->target.npoly;
-    size_t bytes=sp+tp+tv+cap*sizeof(NavPortal);
+    size_t tv=(size_t)s->target.nverts*sizeof(NavVertex),sv=(size_t)s->source.nverts*sizeof(NavVertex);
+    size_t cap=(size_t)s->target.npoly;
+    /* Source polygons are only needed for eligibility. Reuse that bounded
+     * scratch for checking vertex readability afterwards. */
+    size_t source_bytes=sp>sv?sp:sv;
+    size_t bytes=source_bytes+tp+tv+cap*sizeof(NavPortal);
     s->allocation=HeapAlloc(GetProcessHeap(),0,bytes);
     if(!s->allocation)return 0;
     NavPoly *source_polys=(NavPoly *)s->allocation;
-    NavPoly *target_polys=(NavPoly *)((unsigned char *)s->allocation+sp);
+    NavPoly *target_polys=(NavPoly *)((unsigned char *)s->allocation+source_bytes);
     NavVertex *vertices=(NavVertex *)((unsigned char *)target_polys+tp);
     NavPortal *portals=(NavPortal *)((unsigned char *)vertices+tv);
-    if(!safe_read((void *)s->source.polys_ptr,source_polys,sp))return 0;
+    if(!read_call_snapshot((void *)s->source.polys_ptr,source_polys,sp))return 0;
     size_t queries=0;
     for(size_t i=0;i<s->source.npoly;++i) {
         unsigned count=source_polys[i].bytes[30];
@@ -60,9 +64,9 @@ static int nav_build_scope(NavScope *s,void *nav,void *source,void *target,uint3
     }
     /* Amortize a bounded snapshot over repeated queries. Dense portal tiles
      * use native code: this is an index for sparse boundaries, not a new mesh. */
-    if(queries<32 || !safe_read((void *)s->target.polys_ptr,target_polys,tp) ||
-       !safe_read((void *)s->target.verts_ptr,vertices,tv) ||
-       !readable_range((void *)s->source.verts_ptr,(size_t)s->source.nverts*12) ||
+    if(queries<32 || !read_call_snapshot((void *)s->target.polys_ptr,target_polys,tp) ||
+       !read_call_snapshot((void *)s->target.verts_ptr,vertices,tv) ||
+       !read_call_snapshot((void *)s->source.verts_ptr,s->allocation,sv) ||
        !nav_build_index(target_polys,s->target.npoly,vertices,s->target.nverts,portals,cap,&s->index) ||
        !nav_identity(&s->source) || !nav_identity(&s->target))return 0;
     s->nav=nav; return 1;
@@ -264,7 +268,7 @@ static DWORD WINAPI nav_worker(void *unused) {
     unsigned char hash[32];HANDLE log=INVALID_HANDLE_VALUE;PROCESS_INFORMATION pi={0};STARTUPINFOW si={0};
     if(!nav_sibling(output,L"maneater_area_fix.log"))return 0;
     log=CreateFileW(output,FILE_APPEND_DATA,FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);
-    getup_write_log(log,"Maneater v0.7.0: package-loading cleanup with navigation, get-up and FPS corrections.");
+    getup_write_log(log,"Maneater v0.9.0: package-loading cleanup and bounded navigation/get-up reads with FPS correction.");
     if(!nav_sibling(helper,L"ManeaterAreaHelper.exe") || !nav_hash_file(helper,hash) || memcmp(hash,nav_expected_helper_sha,32)) {
         getup_write_log(log,"PASS-THROUGH: helper is missing or its hash changed.");goto done;
     }

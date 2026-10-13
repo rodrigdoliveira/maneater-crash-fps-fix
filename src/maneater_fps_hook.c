@@ -180,6 +180,20 @@ static int safe_read(const void *address, void *buffer, SIZE_T size) {
     return ReadProcessMemory(GetCurrentProcess(), address, buffer, size, &copied) && copied == size;
 }
 
+/* Runtime snapshots of data owned by the current, guarded engine call.
+ * VirtualQuery reports the whole following region, so even a tiny read can
+ * scan a large resident allocation. ReadProcessMemory checks only the bounded
+ * range we actually need and reports inaccessible/partial reads as failure.
+ * Keep mapped-image and write-permission checks on their separate paths.
+ * Nothing about a pointer's readability is cached across calls. */
+static int read_call_snapshot(const void *address, void *buffer, SIZE_T size) {
+    uintptr_t from = (uintptr_t)address, to = (uintptr_t)buffer;
+    SIZE_T copied = 0;
+    if (from < 0x10000U || to < 0x10000U || !size || size > 1024U * 1024U ||
+        size > UINTPTR_MAX - from || size > UINTPTR_MAX - to) return 0;
+    return ReadProcessMemory(GetCurrentProcess(), address, buffer, size, &copied) && copied == size;
+}
+
 /* Fixed offsets must belong to the main mapped image, not merely to readable
  * memory nearby. Heap CVar storage has its separate existing object guards.
  */
@@ -390,7 +404,7 @@ static DWORD WINAPI install_worker(void *unused) {
     char line[256];
     (void)unused;
     open_log();
-    log_line("Maneater Codex FPS hook v0.2: requested native 60 -> 120; menu0 and other settings forwarded.");
+    log_line("Maneater FPS hook v0.9.0: requested native 60 -> 120; menu0 and other settings forwarded.");
     if (!validate_build()) {
         log_line("PASS-THROUGH: runtime build/signature guard rejected this executable; no object changed.");
         goto done;

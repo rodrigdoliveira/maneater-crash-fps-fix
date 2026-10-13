@@ -11,7 +11,7 @@ function New-Bundle($Case){
     [IO.File]::WriteAllText($path,($build|ConvertTo-Json -Depth 10))
 }
 try{
-    $case=New-Scenario 'applied-upgrade';$first=Invoke-Case $case
+    $case=New-Scenario 'applied-upgrade' -PackageVersion '0.8.0';$first=Invoke-Case $case
     $steamHash=Hash $case.Config;$anselHash=Hash $first.Plan.Ansel.DisabledPath;$originalBackup=$first.BackupDirectory
     New-Bundle $case
     Assert-Test ((Test-CaseState $case $first).Valid-and(Test-CaseState $case $first).BundleUpdateAvailable) 'working older repair reports a bundled update'
@@ -24,7 +24,7 @@ try{
     Assert-Test ((Same-Config $case)-and[IO.File]::Exists($case.Ansel)-and-not[IO.File]::Exists((Join-Path $case.Bin 'dxgi.dll'))-and-not[IO.File]::Exists((Join-Path $case.Bin 'ManeaterAreaHelper.exe'))) 'Restore still returns original pre-repair setup after upgrade'
 
     foreach($mode in @('before-record','after-record')){
-        $case=New-Scenario ('upgrade-failure-'+$mode);$first=Invoke-Case $case
+        $case=New-Scenario ('upgrade-failure-'+$mode) -PackageVersion '0.8.0';$first=Invoke-Case $case
         $modHash=Hash $first.Plan.Native.ModPath;$helperHash=Hash $first.Plan.Native.HelperPath;$steamHash=Hash $case.Config
         $oldState=Get-Content (Join-Path $case.Root '.local/installation.json') -Raw|ConvertFrom-Json
         New-Bundle $case
@@ -35,12 +35,12 @@ try{
         Assert-Test ((Read-Journal $case).Status-ceq'applied'-and(Same-NativeRecord $case $oldState)-and(Hash $case.Config)-ceq$steamHash) 'previous journal, ownership and Steam configuration retained'
     }
 
-    $case=New-Scenario 'no-file-change';$first=Invoke-Case $case;$oldMod=Hash $first.Plan.Native.ModPath
+    $case=New-Scenario 'no-file-change' -PackageVersion '0.8.0';$first=Invoke-Case $case;$oldMod=Hash $first.Plan.Native.ModPath
     $path=Join-Path $case.Root 'dist/build.json';$build=Get-Content $path -Raw|ConvertFrom-Json;$build.Version='0.9.0';[IO.File]::WriteAllText($path,($build|ConvertTo-Json))
     $updated=Invoke-Case $case
     Assert-Test ($updated.PackageVersion-ceq'0.9.0'-and(Hash $updated.Plan.Native.ModPath)-ceq$oldMod-and$updated.BackupDirectory-ceq$first.BackupDirectory) 'metadata-only bundle update preserves installed files and original backups'
 
-    $case=New-Scenario 'preexisting-owned-pair';$original=Set-OldNative $case -SameHashes;$first=Invoke-Case $case
+    $case=New-Scenario 'preexisting-owned-pair' -PackageVersion '0.8.0';$original=Set-OldNative $case -SameHashes;$first=Invoke-Case $case
     Assert-Test ($first.Plan.Native.Action-ceq'None') 'matching preexisting pair initially left alone'
     New-Bundle $case;$updated=Invoke-Case $case
     Assert-Test ($updated.Plan.Native.Action-ceq'ReplaceRecognized') 'first real change acquires reversible ownership'

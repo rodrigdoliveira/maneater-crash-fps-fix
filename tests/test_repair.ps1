@@ -18,7 +18,7 @@ function New-GameBytes {
     foreach($pair in @(@(60,0x80),@(0x80,0x4550),@(0xa8,0x1000),@(0xd0,0x2000),@(0xd4,0x200))){[Array]::Copy([BitConverter]::GetBytes([uint32]$pair[1]),0,$bytes,[int]$pair[0],4)}
     return ,$bytes
 }
-function New-Scenario([string]$Name){
+function New-Scenario([string]$Name,[string]$PackageVersion='0.9.0'){
     $repo=Join-Path $testRoot $Name
     [IO.Directory]::CreateDirectory((Join-Path $repo 'scripts'))|Out-Null
     foreach($name in @('Repair','PeExports','Compiler','CpuPlan','SteamFix','AnselFix')){[IO.File]::Copy((Join-Path $sourceRoot ('scripts\'+$name+'.psm1')),(Join-Path $repo ('scripts\'+$name+'.psm1')),$false)}
@@ -42,7 +42,7 @@ function New-Scenario([string]$Name){
     $mod=Join-Path $repo 'dist\dxgi.dll';$system=Join-Path $repo 'dist\fixture-system.dll'
     [IO.File]::WriteAllText($mod,'fixture new proxy');[IO.File]::WriteAllText($system,'fixture system copy')
     $helper=Join-Path $repo 'dist\ManeaterAreaHelper.exe';[IO.File]::WriteAllText($helper,'inert fixture helper; never executed')
-    $manifest=[pscustomobject]@{Version='0.8.0';GameSHA256=(Hash $exe);TargetFPS=120;ModSHA256=(Hash $mod);HelperSHA256=(Hash $helper)}
+    $manifest=[pscustomobject]@{Version=$PackageVersion;GameSHA256=(Hash $exe);TargetFPS=120;ModSHA256=(Hash $mod);HelperSHA256=(Hash $helper)}
     [IO.File]::WriteAllText((Join-Path $repo 'dist\build.json'),($manifest|ConvertTo-Json))
     $installer=@'
 param([string]$Action,[string]$GameDirectory,[switch]$AllowUntestedBuild,[string]$ExpectedGameSHA256)
@@ -116,7 +116,7 @@ function Use-RealBundleReadiness($Case){
     foreach($relative in @('src/maneater_fps_hook.c','scripts/PeExports.psm1','build.ps1','Manage-Mod.ps1')){$hashes[$relative]=Hash (Join-Path $Case.Root $relative)}
     $exports=@([pscustomobject]@{Name='Alpha';Ordinal=1},[pscustomobject]@{Name='Beta';Ordinal=2})
     $contract=& $Case.Module {param($Exports) Get-ExportContractHash -Exports $Exports} $exports
-    $manifest=[pscustomobject]@{SchemaVersion=1;Version='0.8.0';GameSHA256=(Hash $Case.Exe);TargetFPS=120;ModSHA256=(Hash $Case.Mod);HelperSHA256=(Hash $Case.Helper);DefinitionSHA256=(Hash $definition);SystemExportsSHA256=$contract;ModExportsSHA256=$contract;SystemExports=$exports;BuildSystemDLLSHA256=(Hash $Case.System);SourceHashes=$hashes}
+    $manifest=[pscustomobject]@{SchemaVersion=1;Version='0.9.0';GameSHA256=(Hash $Case.Exe);TargetFPS=120;ModSHA256=(Hash $Case.Mod);HelperSHA256=(Hash $Case.Helper);DefinitionSHA256=(Hash $definition);SystemExportsSHA256=$contract;ModExportsSHA256=$contract;SystemExports=$exports;BuildSystemDLLSHA256=(Hash $Case.System);SourceHashes=$hashes}
     [IO.File]::WriteAllText((Join-Path $Case.Root 'dist\build.json'),($manifest|ConvertTo-Json -Depth 6))
     $tokens=$null;$errors=$null
     $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $sourceRoot 'scripts\Repair.psm1'),[ref]$tokens,[ref]$errors)
@@ -184,6 +184,43 @@ try{
     Restore-Case $case|Out-Null
     Assert-Test ((Hash $oldMod) -ceq $oldHash -and (Hash (Join-Path $case.Bin 'dxgi_codex_system.dll')) -ceq (Hash $case.System)) 'previous recognized pair restored byte-for-byte'
     Assert-Test (-not [IO.File]::Exists((Join-Path $case.Root '.local\installation.json'))) 'created native ownership record removed for restored unmanaged pair'
+
+    foreach($release in @('PublicV08','LocalV08')){
+        $case=New-Scenario ('recognized-'+$release)
+        $oldMod=Join-Path $case.Bin 'dxgi.dll';$oldHelper=Join-Path $case.Bin 'ManeaterAreaHelper.exe'
+        [IO.File]::WriteAllText($oldMod,('fixture recognized '+$release+' proxy'))
+        [IO.File]::WriteAllText($oldHelper,('fixture recognized '+$release+' helper'))
+        $oldHash=Hash $oldMod;$oldHelperHash=Hash $oldHelper
+        [IO.File]::Copy($case.System,(Join-Path $case.Bin 'dxgi_codex_system.dll'),$false)
+        & $case.Module {param($Release,$ModHash,$HelperHash) Set-Variable -Name ($Release+'ModHash') -Value $ModHash -Scope Script;Set-Variable -Name ($Release+'HelperHash') -Value $HelperHash -Scope Script} $release $oldHash $oldHelperHash
+        $journal=Invoke-Case $case
+        Assert-Test ($journal.Plan.Native.Action -ceq 'ReplaceRecognized' -and $journal.Plan.Native.OriginalModHash -ceq $oldHash -and $journal.Plan.Native.OriginalHelperHash -ceq $oldHelperHash) "$release unmanaged native tuple recognized and captured"
+        Assert-Test ((Hash $oldMod) -ceq (Hash $case.Mod) -and (Hash $oldHelper) -ceq (Hash $case.Helper)) "$release upgrade installs both desired native files"
+        Restore-Case $case|Out-Null
+        Assert-Test ((Hash $oldMod) -ceq $oldHash -and (Hash $oldHelper) -ceq $oldHelperHash -and (Hash (Join-Path $case.Bin 'dxgi_codex_system.dll')) -ceq (Hash $case.System)) "$release restore returns complete previous tuple byte-for-byte"
+        Assert-Test ((Same-Config $case) -and [IO.File]::Exists($case.Ansel) -and -not [IO.File]::Exists((Join-Path $case.Root '.local\installation.json'))) "$release restore preserves original settings and unmanaged ownership"
+
+        $case=New-Scenario ('mismatched-helper-'+$release)
+        $oldMod=Join-Path $case.Bin 'dxgi.dll';$oldHelper=Join-Path $case.Bin 'ManeaterAreaHelper.exe'
+        [IO.File]::WriteAllText($oldMod,('fixture recognized '+$release+' proxy'))
+        [IO.File]::WriteAllText($oldHelper,'foreign helper fixture; must remain untouched')
+        $oldHash=Hash $oldMod;$oldHelperHash=Hash $oldHelper
+        [IO.File]::Copy($case.System,(Join-Path $case.Bin 'dxgi_codex_system.dll'),$false)
+        & $case.Module {param($Release,$ModHash) Set-Variable -Name ($Release+'ModHash') -Value $ModHash -Scope Script;Set-Variable -Name ($Release+'HelperHash') -Value ('0'*64) -Scope Script} $release $oldHash
+        Assert-Throws {Invoke-Case $case} "$release proxy with mismatched helper refused"
+        Assert-Test ((Hash $oldMod) -ceq $oldHash -and (Hash $oldHelper) -ceq $oldHelperHash -and (Hash (Join-Path $case.Bin 'dxgi_codex_system.dll')) -ceq (Hash $case.System)) "$release mismatch preserves every previous native file"
+        Assert-Test ((Same-Config $case) -and [IO.File]::Exists($case.Ansel) -and -not [IO.File]::Exists((Join-Path $case.Root '.local\repair.json'))) "$release mismatch performs no repair transaction or settings changes"
+    }
+
+    $case=New-Scenario 'local-v08-untested-refusal'
+    $oldMod=Join-Path $case.Bin 'dxgi.dll';$oldHelper=Join-Path $case.Bin 'ManeaterAreaHelper.exe'
+    [IO.File]::WriteAllText($oldMod,'fixture local hotfix proxy');[IO.File]::WriteAllText($oldHelper,'fixture local hotfix helper')
+    $oldHash=Hash $oldMod;$oldHelperHash=Hash $oldHelper
+    [IO.File]::Copy($case.System,(Join-Path $case.Bin 'dxgi_codex_system.dll'),$false)
+    & $case.Module {param($ModHash,$HelperHash) $script:LocalV08ModHash=$ModHash;$script:LocalV08HelperHash=$HelperHash} $oldHash $oldHelperHash
+    $unknown=[IO.File]::ReadAllBytes($case.Exe);$unknown[1023]=8;[IO.File]::WriteAllBytes($case.Exe,$unknown)
+    Assert-Throws {Invoke-Case $case -AllowUntestedBuild} 'local hotfix tuple remains limited to its tested game even with untested opt-in'
+    Assert-Test ((Hash $oldMod) -ceq $oldHash -and (Hash $oldHelper) -ceq $oldHelperHash -and (Same-Config $case) -and [IO.File]::Exists($case.Ansel) -and -not [IO.File]::Exists((Join-Path $case.Root '.local\repair.json'))) 'local hotfix untested refusal preserves native files and original setup'
 
     $case=New-Scenario 'foreign-after-apply';$journal=Invoke-Case $case
     [IO.File]::WriteAllText($journal.Plan.Native.SystemPath,'foreign replacement')

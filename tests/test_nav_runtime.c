@@ -1,6 +1,18 @@
 /* Standalone synthetic-memory fixture. This includes the implementation but
  * never invokes DllMain, workers, publication, the helper, or game code. */
+#include <windows.h>
+static unsigned fixture_region_queries,fixture_snapshot_reads;
+static SIZE_T WINAPI counted_virtual_query(LPCVOID p,PMEMORY_BASIC_INFORMATION m,SIZE_T n) {
+    ++fixture_region_queries;return VirtualQuery(p,m,n);
+}
+static BOOL WINAPI counted_process_read(HANDLE h,LPCVOID p,LPVOID b,SIZE_T n,SIZE_T *done) {
+    ++fixture_snapshot_reads;return ReadProcessMemory(h,p,b,n,done);
+}
+#define VirtualQuery counted_virtual_query
+#define ReadProcessMemory counted_process_read
 #include "../src/maneater_fps_hook.c"
+#undef VirtualQuery
+#undef ReadProcessMemory
 #include <stdlib.h>
 
 static unsigned assertions, groups, finder_calls, connect_calls;
@@ -32,13 +44,13 @@ static void putptr(unsigned char *p,size_t at,const void *v){uintptr_t a=(uintpt
 static void put16(NavPoly *p,size_t at,uint16_t v){p->bytes[at]=(uint8_t)v;p->bytes[at+1]=(uint8_t)(v>>8);}
 static void *tile(TestScene *s,unsigned which){return s->tiles+which*0xb0;}
 
-static void make_scene(TestScene *s)
+static void make_scene(TestScene *s,uint32_t vertex_count)
 {
     static const unsigned offsets[]={0x18,0x10,0x20,0x28,0x30,0x38,0x40,0x48,0x50,0x70,0x78};
     static const unsigned counts[]={7,6,8,9,10,11,12,13,14,28,6};
     static const unsigned strides[]={12,32,16,12,12,4,16,40,64,20,2};
     memset(s,0,sizeof(*s));
-    s->size=0x74+4*12+256*32+256*16+256*12;
+    s->size=0x74+(size_t)vertex_count*12+256*32+256*16+256*12;
     s->nav=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,0xa8);
     s->tiles=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,2*0xb0);
     CHECK(s->nav && s->tiles);
@@ -48,7 +60,7 @@ static void make_scene(TestScene *s)
         s->data[k]=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,s->size);
         CHECK(s->data[k]!=NULL);
         unsigned char *h=s->data[k];
-        put32(h,0,0x444e4156);put32(h,4,7);put32(h,0x18,256);put32(h,0x1c,4);
+        put32(h,0,0x444e4156);put32(h,4,7);put32(h,0x18,256);put32(h,0x1c,vertex_count);
         put32(h,0x20,256);put32(h,0x24,256);
         put32(t,0,k+1);putptr(t,8,h);putptr(t,0x58,h);put32(t,0x60,(uint32_t)s->size);
         unsigned char *at=h+0x74;
@@ -62,7 +74,7 @@ static void make_scene(TestScene *s)
         CHECK(at==h+s->size);
         s->verts[k]=(float *)nav_ptr_at(t,0x18);
         s->polys[k]=(NavPoly *)nav_ptr_at(t,0x10);
-        for(unsigned i=0;i<4;++i){
+        for(unsigned i=0;i<vertex_count;++i){
             s->verts[k][i*3]=k?10.0f:0.0f;
             s->verts[k][i*3+1]=0.0f;
             s->verts[k][i*3+2]=(float)(i&1);
@@ -136,6 +148,66 @@ static int32_t call(TestScene *s,uintptr_t caller,const float *va,const float *v
     return nav_dispatch(caller,s->nav,va,vb,tile(s,0),poly,tile(s,1),side,output);
 }
 
+static void test_bounded_snapshot(void)
+{
+    SYSTEM_INFO info;GetSystemInfo(&info);SIZE_T page=info.dwPageSize;
+    unsigned char *memory=VirtualAlloc(NULL,page*3,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    unsigned char copy[176];DWORD old;MEMORY_BASIC_INFORMATION state;
+    CHECK(memory!=NULL);memset(memory,0x51,page*3);
+    fixture_region_queries=0;
+    CHECK(read_call_snapshot(memory+page-88,copy,sizeof(copy)));
+    for(unsigned i=0;i<sizeof(copy);++i)CHECK(copy[i]==0x51);
+    CHECK(!read_call_snapshot(NULL,copy,sizeof(copy)));
+    CHECK(!read_call_snapshot((void *)(uintptr_t)0x1234,copy,sizeof(copy)));
+    CHECK(!read_call_snapshot(memory,copy,0));
+    CHECK(!read_call_snapshot(memory,copy,1024U*1024U+1U));
+    CHECK(!read_call_snapshot((void *)(UINTPTR_MAX-10U),copy,16));
+    CHECK(!read_call_snapshot(memory,(void *)(UINTPTR_MAX-10U),16));
+    CHECK(VirtualProtect(memory+page,page,PAGE_READWRITE|PAGE_GUARD,&old));
+    for(unsigned attempt=0;attempt<3;++attempt){
+        CHECK(!read_call_snapshot(memory+page,copy,sizeof(copy)));
+        CHECK(VirtualQuery(memory+page,&state,sizeof(state))==sizeof(state));
+        CHECK(state.Protect==(PAGE_READWRITE|PAGE_GUARD));
+    }
+    CHECK(!read_call_snapshot(memory+page-88,copy,sizeof(copy)));
+    CHECK(VirtualQuery(memory+page,&state,sizeof(state))==sizeof(state));
+    CHECK(state.Protect==(PAGE_READWRITE|PAGE_GUARD));
+    NavTileView view;
+    CHECK(!nav_read_view(memory+page,&view));
+    CHECK(VirtualProtect(memory+page,page,PAGE_NOACCESS,&old));
+    CHECK(!read_call_snapshot(memory+page,copy,sizeof(copy)));
+    CHECK(!read_call_snapshot(memory+page-88,copy,sizeof(copy)));
+    CHECK(VirtualProtect(memory+page,page,PAGE_READONLY,&old));
+    CHECK(read_call_snapshot(memory+page-88,copy,sizeof(copy)));
+    CHECK(VirtualFree(memory+page,page,MEM_DECOMMIT));
+    CHECK(!read_call_snapshot(memory+page,copy,sizeof(copy)));
+    CHECK(!read_call_snapshot(memory+page-88,copy,sizeof(copy)));
+    CHECK(VirtualFree(memory,0,MEM_RELEASE));
+    CHECK(!read_call_snapshot(memory,copy,sizeof(copy)));
+    CHECK(fixture_region_queries==0); /* Runtime reader must never region-scan. */
+    ++groups;
+}
+
+static void test_large_vertex_scratch(void)
+{
+    const uint32_t counts[]={1024,65536};
+    for(unsigned i=0;i<sizeof(counts)/sizeof(counts[0]);++i){
+        TestScene scene;NavScope scope;memset(&scope,0,sizeof(scope));make_scene(&scene,counts[i]);
+        fixture_region_queries=0;
+        CHECK(nav_build_scope(&scope,scene.nav,tile(&scene,0),tile(&scene,1),0));
+        CHECK(fixture_region_queries==0 && scope.source.nverts==counts[i]);
+        CHECK(scope.index.valid && scope.index.count==32);
+        /* Reading the larger vertex range into reused scratch must not
+         * overwrite the following target polygon/vertex/index storage. */
+        for(size_t j=0;j<scope.index.count;++j){
+            CHECK(scope.index.records[j].plane==10.0f && scope.index.records[j].side==0);
+        }
+        CHECK(!nav_may_connect_trusted(&scope.index,scene.verts[0],scene.verts[0]+3,0));
+        release_scope(&scope);free_scene(&scene);
+    }
+    ++groups;
+}
+
 static void test_unwind_metadata(void)
 {
     unsigned char *code=VirtualAlloc(NULL,4096,MEM_RESERVE|MEM_COMMIT,PAGE_EXECUTE_READWRITE);
@@ -168,11 +240,13 @@ static void test_unwind_metadata(void)
 int main(void)
 {
     unsigned saved_mxcsr=_mm_getcsr();TestScene scene;NavScope scope;
-    memset(&scope,0,sizeof(scope));make_scene(&scene);active_scene=&scene;
+    memset(&scope,0,sizeof(scope));make_scene(&scene,4);active_scene=&scene;
     nav_tls=TlsAlloc();CHECK(nav_tls!=TLS_OUT_OF_INDEXES);
     nav_original_finder=original_finder;nav_original_connect=original_connect;
     g_game_base=UINT64_C(0x140000000);nav_enabled=1;
+    test_bounded_snapshot();test_large_vertex_scratch();fixture_region_queries=0;
     CHECK(nav_build_scope(&scope,scene.nav,tile(&scene,0),tile(&scene,1),0));
+    CHECK(fixture_region_queries==0);
     CHECK(scope.index.valid==1 && scope.index.count==32 && !scope.disabled);
     CHECK(TlsSetValue(nav_tls,&scope));
     ++groups;
@@ -180,7 +254,9 @@ int main(void)
     /* Negative: no original invocation, no output write, exact caller state. */
     unsigned char before[sizeof(output)];memset(output,0xa9,sizeof(output));memcpy(before,output,sizeof(output));
     set_environment(0x5fb1);finder_calls=0;original_write=1;
+    unsigned reads_before=fixture_snapshot_reads;
     CHECK(call(&scene,g_game_base+0x2b5aef5,scene.verts[0],scene.verts[0]+3,0,0)==0);
+    CHECK(fixture_snapshot_reads==reads_before && fixture_region_queries==0);
     CHECK(!finder_calls && !memcmp(output,before,sizeof(output)));
     CHECK(GetLastError()==expected_in_error && _mm_getcsr()==expected_in_mxcsr);
     CHECK(scope.queries==1 && scope.rejected==1);++groups;

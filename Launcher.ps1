@@ -31,7 +31,7 @@ if(-not [string]::IsNullOrWhiteSpace($SteamContextPath)){
     $script:initialSteamContext=Get-Content -LiteralPath $contextFile -Raw|ConvertFrom-Json
 }
 $form = New-Object Windows.Forms.Form
-$form.Text = 'Maneater Crash & FPS Fix - 0.8.0'
+$form.Text = 'Maneater Crash & FPS Fix - 0.9.0'
 $form.StartPosition = 'CenterScreen'
 $form.ClientSize = New-Object Drawing.Size(860,740)
 $form.MinimumSize = New-Object Drawing.Size(820,780)

@@ -123,7 +123,7 @@ static DWORD WINAPI getup_install_worker(void *unused) {
     void *function = NULL, *native = NULL;
     void *volatile *slot = NULL;
     (void)unused;
-    getup_write_log(log, "Maneater v0.7.0: optimized uninjured chest-down get-up animation lookup.");
+    getup_write_log(log, "Maneater v0.9.0: optimized uninjured chest-down get-up animation lookup.");
     if (!getup_static_guards()) {
         getup_write_log(log, "PASS-THROUGH: strict native helper, registration or array-layout guard failed.");
         goto done;
@@ -160,7 +160,9 @@ static DWORD WINAPI getup_install_worker(void *unused) {
     g_getup_environment.reserve = (GetupReserve)(g_game_base + GETUP_RESERVE_RVA);
     g_getup_environment.select = (GetupSelect)(g_game_base + GETUP_SELECTOR_RVA);
     g_getup_environment.release = (GetupFree)(g_game_base + GETUP_FREE_RVA);
-    g_getup_environment.read = safe_read;
+    /* These bounded inputs belong to the active native call. Keep failed-read
+     * fallback without a separate memory-region query for every field/copy. */
+    g_getup_environment.read = read_call_snapshot;
     g_getup_environment.writable = getup_writable_range;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
                             (LPCWSTR)(uintptr_t)&getup_private_exec, &pinned)) {

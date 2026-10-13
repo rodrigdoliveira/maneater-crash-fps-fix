@@ -91,8 +91,8 @@ try{
     $payloadDist=Join-Path $payload 'dist';[IO.Directory]::CreateDirectory($payloadDist)|Out-Null
     foreach($name in $prebuiltArtifacts){[IO.File]::WriteAllBytes((Join-Path $payloadDist $name),[IO.File]::ReadAllBytes((Join-Path $dist $name)))}
     $manifest=Get-Content -LiteralPath (Join-Path $payloadDist 'build.json') -Raw|ConvertFrom-Json
-    if($manifest.SchemaVersion -ne 1 -or $manifest.Version -cne '0.8.0' -or $manifest.TargetFPS -ne 120 -or
-        $manifest.GameSHA256 -cne 'CC34E43BBD1F757E3883ADAF37D643C1A0FB2963967CA33AF7CB6CB8F54480C0'){throw 'Prebuilt manifest does not describe the v0.8.0 build.'}
+    if($manifest.SchemaVersion -ne 1 -or $manifest.Version -cne '0.9.0' -or $manifest.TargetFPS -ne 120 -or
+        $manifest.GameSHA256 -cne 'CC34E43BBD1F757E3883ADAF37D643C1A0FB2963967CA33AF7CB6CB8F54480C0'){throw 'Prebuilt manifest does not describe the v0.9.0 build.'}
     if ($manifest.HelperSHA256 -cnotmatch '^[0-9A-F]{64}$' -or (Release-Hash (Join-Path $payloadDist 'ManeaterAreaHelper.exe')) -cne $manifest.HelperSHA256) { throw 'Companion helper hash differs from manifest.' }
     $helperHeader=[IO.File]::ReadAllText((Join-Path $payload 'src/nav_helper_hash.h'))
     $helperBytes=([regex]::Matches($helperHeader,'0x([0-9a-fA-F]{2})') | ForEach-Object { $_.Groups[1].Value }) -join ''
@@ -159,7 +159,7 @@ try{
     $zipHash=Release-Hash $readyZip
     if((Release-Hash $outputTemp) -cne $zipHash){throw 'Release ZIP copy verification failed.'}
     if([IO.File]::Exists($output)){[IO.File]::Replace($outputTemp,$output,[NullString]::Value)}else{[IO.File]::Move($outputTemp,$output)}
-    [pscustomobject]@{Version='0.8.0';ZipPath=$output;SHA256=$zipHash;SourceCommit=$head;SourceTree=$tree;SourceFileCount=$sources.Count;NativeArtifactCount=$artifacts.Count;NativeExports=$proxy.Exports.Count;NativeImports=$imports;HelperImports=$helperImports}
+    [pscustomobject]@{Version='0.9.0';ZipPath=$output;SHA256=$zipHash;SourceCommit=$head;SourceTree=$tree;SourceFileCount=$sources.Count;NativeArtifactCount=$artifacts.Count;NativeExports=$proxy.Exports.Count;NativeImports=$imports;HelperImports=$helperImports}
 }finally{
     if($null -ne $outputTemp -and [IO.File]::Exists($outputTemp)){[IO.File]::Delete($outputTemp)}
     if($null -ne $stage -and [IO.Directory]::Exists($stage)){

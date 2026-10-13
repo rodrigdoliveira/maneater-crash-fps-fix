@@ -17,7 +17,7 @@ foreach($folder in @('src','vendor')){
 }
 # All native executables below are isolated synthetic fixtures. This facade
 # never invokes DllMain, any real game installer, a game executable or a worker.
-foreach($name in @('run_nav_filter_tests.ps1','run_nav_filter_v2_tests.ps1','run_nav_scope_tests.ps1','run_nav_runtime_tests.ps1','run_loading_runtime_tests.ps1','run_test_getup_core.ps1','run_loading_helper_fixtures.ps1')){
+foreach($name in @('run_nav_filter_tests.ps1','run_nav_filter_v2_tests.ps1','run_nav_scope_tests.ps1','run_nav_runtime_tests.ps1','run_loading_runtime_tests.ps1','run_test_getup_core.ps1','run_getup_snapshot_tests.ps1','run_loading_helper_fixtures.ps1')){
     & (Join-Path $PSScriptRoot $name) -ZigPath $taskCompiler
 }
 $taskVendor=@('vendor/minhook/src/buffer.c','vendor/minhook/src/trampoline.c','vendor/minhook/src/hde/hde64.c')|ForEach-Object {Join-Path $taskRoot $_}

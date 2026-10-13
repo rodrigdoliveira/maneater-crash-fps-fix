@@ -6,6 +6,10 @@ $script:LegacyModHash = '5C9EF79C6F5EBC99DB15E62E883F5635FF4133442BFDE6891D98A38
 $script:PublicV02ModHash = '3D6BE39D601175AD5DC435A68EFB6036C107C0646C94A99300567F82387B660E'
 $script:PublicV07ModHash = 'BF59359AC0DA0823B563F501E18BBF407E6359C07B1E1524F8886D894112103D'
 $script:PublicV07HelperHash = '898C59D575AFF5DD9F6CDB0F46A2DEB5F1700DF80A5DDFE2A86AE1C71B1DCB7A'
+$script:PublicV08ModHash = 'AD10EBBA7A293B8D5323A19997495E50A234A3EAD73BE8BB8F89D60FA25C253A'
+$script:PublicV08HelperHash = '898C59D575AFF5DD9F6CDB0F46A2DEB5F1700DF80A5DDFE2A86AE1C71B1DCB7A'
+$script:LocalV08ModHash = '06CF53D9174E600D9745C16EB4F51B50C5568B41D831A6A5E534BFC000BEB3CC'
+$script:LocalV08HelperHash = '898C59D575AFF5DD9F6CDB0F46A2DEB5F1700DF80A5DDFE2A86AE1C71B1DCB7A'
 $script:PrivateLoadingModHash = '03FAD0061DD00A332E2C93CA10FE3ECF2379ADAFBEBE7A59A2FFDE384A11E744'
 $script:PrivateLoadingHelperHash = 'B1399B39E4CA9E7E1C48F761AFA42FB0649A239F7EC55F6706655FC76FDC21B4'
 $script:PreviewV07ModHash = '85B190F0AD305F9FD0D9C9A676D61B4179FB736F32D6ED3C4BC9E468F80208BF'
@@ -82,7 +86,7 @@ function Test-BundleUpdateAvailable($Journal){
 function Get-RepairBuildReady {
     try {
         $manifest = Get-Content -LiteralPath (Join-Path $script:Root 'dist\build.json') -Raw | ConvertFrom-Json
-        if ($manifest.SchemaVersion -ne 1 -or $manifest.Version -cne '0.8.0' -or $manifest.GameSHA256 -cne $script:SupportedGameHash -or $manifest.TargetFPS -ne 120 -or $manifest.HelperSHA256 -cnotmatch '^[0-9A-F]{64}$') { return $false }
+        if ($manifest.SchemaVersion -ne 1 -or $manifest.Version -cne '0.9.0' -or $manifest.GameSHA256 -cne $script:SupportedGameHash -or $manifest.TargetFPS -ne 120 -or $manifest.HelperSHA256 -cnotmatch '^[0-9A-F]{64}$') { return $false }
         $sources = [Collections.Generic.List[string]]::new()
         foreach ($folder in @('src','vendor')) {
             $directory = Join-Path $script:Root $folder
@@ -142,6 +146,8 @@ function Get-NativeRepairPlan {
         } else {
             $known = (-not $helperPresent) -and ($oldModHash -ceq $script:LegacyModHash -or $oldModHash -ceq $script:PublicV02ModHash)
             $known = $known -or ($oldModHash -ceq $script:PublicV07ModHash -and $oldHelperHash -ceq $script:PublicV07HelperHash)
+            $known = $known -or ($oldModHash -ceq $script:PublicV08ModHash -and $oldHelperHash -ceq $script:PublicV08HelperHash)
+            $known = $known -or ((Test-RepairGameTested $Game) -and $oldModHash -ceq $script:LocalV08ModHash -and $oldHelperHash -ceq $script:LocalV08HelperHash)
             $known = $known -or ((Test-RepairGameTested $Game) -and $oldModHash -ceq $script:PrivateLoadingModHash -and $oldHelperHash -ceq $script:PrivateLoadingHelperHash)
             $known = $known -or ((Test-RepairGameTested $Game) -and $oldModHash -ceq $script:PreviewV07ModHash -and $oldHelperHash -ceq $script:PreviewV07HelperHash)
             if (Get-RepairBuildReady) {
