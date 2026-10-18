@@ -18,7 +18,7 @@ function New-GameBytes {
     foreach($pair in @(@(60,0x80),@(0x80,0x4550),@(0xa8,0x1000),@(0xd0,0x2000),@(0xd4,0x200))){[Array]::Copy([BitConverter]::GetBytes([uint32]$pair[1]),0,$bytes,[int]$pair[0],4)}
     return ,$bytes
 }
-function New-Scenario([string]$Name,[string]$PackageVersion='0.9.0'){
+function New-Scenario([string]$Name,[string]$PackageVersion='0.9.1'){
     $repo=Join-Path $testRoot $Name
     [IO.Directory]::CreateDirectory((Join-Path $repo 'scripts'))|Out-Null
     foreach($name in @('Repair','PeExports','Compiler','CpuPlan','SteamFix','AnselFix')){[IO.File]::Copy((Join-Path $sourceRoot ('scripts\'+$name+'.psm1')),(Join-Path $repo ('scripts\'+$name+'.psm1')),$false)}
@@ -117,7 +117,7 @@ function Use-RealBundleReadiness($Case){
     foreach($relative in @('src/maneater_fps_hook.c','scripts/PeExports.psm1','build.ps1','Manage-Mod.ps1')){$hashes[$relative]=Hash (Join-Path $Case.Root $relative)}
     $exports=@([pscustomobject]@{Name='Alpha';Ordinal=1},[pscustomobject]@{Name='Beta';Ordinal=2})
     $contract=& $Case.Module {param($Exports) Get-ExportContractHash -Exports $Exports} $exports
-    $manifest=[pscustomobject]@{SchemaVersion=1;Version='0.9.0';GameSHA256=(Hash $Case.Exe);TargetFPS=120;ModSHA256=(Hash $Case.Mod);HelperSHA256=(Hash $Case.Helper);DefinitionSHA256=(Hash $definition);SystemExportsSHA256=$contract;ModExportsSHA256=$contract;SystemExports=$exports;BuildSystemDLLSHA256=(Hash $Case.System);SourceHashes=$hashes}
+    $manifest=[pscustomobject]@{SchemaVersion=1;Version='0.9.1';GameSHA256=(Hash $Case.Exe);TargetFPS=120;ModSHA256=(Hash $Case.Mod);HelperSHA256=(Hash $Case.Helper);DefinitionSHA256=(Hash $definition);SystemExportsSHA256=$contract;ModExportsSHA256=$contract;SystemExports=$exports;BuildSystemDLLSHA256=(Hash $Case.System);SourceHashes=$hashes}
     [IO.File]::WriteAllText((Join-Path $Case.Root 'dist\build.json'),($manifest|ConvertTo-Json -Depth 6))
     $tokens=$null;$errors=$null
     $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $sourceRoot 'scripts\Repair.psm1'),[ref]$tokens,[ref]$errors)

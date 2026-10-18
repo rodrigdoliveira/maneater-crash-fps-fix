@@ -7,16 +7,16 @@ function New-Bundle($Case){
     [IO.File]::WriteAllText($Case.Mod,'newer inert native proxy')
     [IO.File]::WriteAllText($Case.Helper,'newer inert attachment helper')
     $path=Join-Path $Case.Root 'dist/build.json';$build=Get-Content $path -Raw|ConvertFrom-Json
-    $build.Version='0.9.0';$build.ModSHA256=Hash $Case.Mod;$build.HelperSHA256=Hash $Case.Helper
+    $build.Version='0.9.1';$build.ModSHA256=Hash $Case.Mod;$build.HelperSHA256=Hash $Case.Helper
     [IO.File]::WriteAllText($path,($build|ConvertTo-Json -Depth 10))
 }
 try{
-    $case=New-Scenario 'applied-upgrade' -PackageVersion '0.8.0';$first=Invoke-Case $case
+    $case=New-Scenario 'applied-upgrade' -PackageVersion '0.9.0';$first=Invoke-Case $case
     $steamHash=Hash $case.Config;$anselHash=Hash $first.Plan.Ansel.DisabledPath;$originalBackup=$first.BackupDirectory
     New-Bundle $case
     Assert-Test ((Test-CaseState $case $first).Valid-and(Test-CaseState $case $first).BundleUpdateAvailable) 'working older repair reports a bundled update'
     $updated=Invoke-Case $case
-    Assert-Test ($updated.PackageVersion-ceq'0.9.0'-and$updated.BackupDirectory-ceq$originalBackup) 'upgrade retains original restore record and backup directory'
+    Assert-Test ($updated.PackageVersion-ceq'0.9.1'-and$updated.BackupDirectory-ceq$originalBackup) 'upgrade retains original restore record and backup directory'
     Assert-Test ((Hash $updated.Plan.Native.ModPath)-ceq(Hash $case.Mod)-and(Hash $updated.Plan.Native.HelperPath)-ceq(Hash $case.Helper)) 'updated native pair installed'
     Assert-Test ((Hash $case.Config)-ceq$steamHash-and(Hash $updated.Plan.Ansel.DisabledPath)-ceq$anselHash) 'upgrade does not rewrite Steam or Ansel settings'
     Assert-Test ((Test-CaseState $case $updated).Valid-and-not(Test-CaseState $case $updated).BundleUpdateAvailable) 'new bundle verifies and update flag clears'
@@ -36,9 +36,9 @@ try{
     }
 
     $case=New-Scenario 'no-file-change' -PackageVersion '0.8.0';$first=Invoke-Case $case;$oldMod=Hash $first.Plan.Native.ModPath
-    $path=Join-Path $case.Root 'dist/build.json';$build=Get-Content $path -Raw|ConvertFrom-Json;$build.Version='0.9.0';[IO.File]::WriteAllText($path,($build|ConvertTo-Json))
+    $path=Join-Path $case.Root 'dist/build.json';$build=Get-Content $path -Raw|ConvertFrom-Json;$build.Version='0.9.1';[IO.File]::WriteAllText($path,($build|ConvertTo-Json))
     $updated=Invoke-Case $case
-    Assert-Test ($updated.PackageVersion-ceq'0.9.0'-and(Hash $updated.Plan.Native.ModPath)-ceq$oldMod-and$updated.BackupDirectory-ceq$first.BackupDirectory) 'metadata-only bundle update preserves installed files and original backups'
+    Assert-Test ($updated.PackageVersion-ceq'0.9.1'-and(Hash $updated.Plan.Native.ModPath)-ceq$oldMod-and$updated.BackupDirectory-ceq$first.BackupDirectory) 'metadata-only bundle update preserves installed files and original backups'
 
     $case=New-Scenario 'preexisting-owned-pair' -PackageVersion '0.8.0';$original=Set-OldNative $case -SameHashes;$first=Invoke-Case $case
     Assert-Test ($first.Plan.Native.Action-ceq'None') 'matching preexisting pair initially left alone'
@@ -46,7 +46,7 @@ try{
     Assert-Test ($updated.Plan.Native.Action-ceq'ReplaceRecognized') 'first real change acquires reversible ownership'
     Restore-Case $case|Out-Null
     Assert-Test ((Same-NativeRecord $case $original)-and(Hash (Join-Path $case.Bin 'dxgi.dll'))-ceq$original.ModSHA256-and(Hash (Join-Path $case.Bin 'ManeaterAreaHelper.exe'))-ceq$original.HelperSHA256) 'preexisting pair and ownership restored after upgrade'
-    $case=New-Scenario 'portable-upgrade' -PackageVersion '0.8.0';$first=Invoke-Case $case
+    $case=New-Scenario 'portable-upgrade' -PackageVersion '0.9.0';$first=Invoke-Case $case
     $baseHash=Hash $case.Mod;$personalizedHash=Use-PortableBundleReadiness $case
     $updated=Invoke-Case $case
     Assert-Test ($updated.Plan.Native.InstalledHash-ceq$personalizedHash-and$personalizedHash-cne$baseHash-and(Hash $updated.Plan.Native.ModPath)-ceq$personalizedHash) 'portable upgrade records personalized bytes rather than template hash'
@@ -55,7 +55,7 @@ try{
     Assert-Test ($reapplied.BackupDirectory-ceq$first.BackupDirectory-and$reapplied.Plan.Native.InstalledHash-ceq$personalizedHash) 'repeated Apply retains original backup and personalized ownership'
     Restore-Case $case|Out-Null
     Assert-Test ((Same-Config $case)-and-not[IO.File]::Exists((Join-Path $case.Bin 'dxgi.dll'))) 'portable upgrade restores the original pre-repair setup'
-    $case=New-Scenario 'portable-rollback' -PackageVersion '0.8.0';$first=Invoke-Case $case
+    $case=New-Scenario 'portable-rollback' -PackageVersion '0.9.0';$first=Invoke-Case $case
     $oldMod=Hash $first.Plan.Native.ModPath;$oldState=Get-Content (Join-Path $case.Root '.local/installation.json') -Raw|ConvertFrom-Json
     $null=Use-PortableBundleReadiness $case
     [IO.File]::WriteAllText((Join-Path $case.Root '.local/fail-native-after-state'),'injected')

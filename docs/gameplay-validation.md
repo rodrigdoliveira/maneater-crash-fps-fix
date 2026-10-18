@@ -1,5 +1,19 @@
 # Gameplay validation
 
+## v0.9.1 Windows compatibility fix
+
+The tester installed and played with the local Windows-portability package and reported: "i tested it and it works great." The test used Steam build 7837297 on an Intel Core i9-13900K with NVIDIA GeForce RTX 4070. The release retains that forwarding and gameplay implementation, with version labels and build metadata refreshed.
+
+| Tested package file | SHA-256 |
+| --- | --- |
+| Ready-to-run ZIP | `D9F24329BA24B03BA332565DA512C9A1498D3B3C184B89578C5DA8EEBA15A33A` |
+| Template dxgi.dll | `3BD4E92CEB5DC5694DE39C419557F55286A02C560DEDB7B14729E93B8D4008EE` |
+| ManeaterAreaHelper.exe | `7536884CBDDB9CE07784708AB952E5D0F3BBCDBB9CE98D7C20F1C93EAA58BD31` |
+
+The template hash identifies the packaged file. Installation personalizes its graphics forwarding table for the local signed Windows library, so the installed DLL has a different hash. The installed hash was not independently captured during this gameplay test. The tested source commit was `f7d5576ae7690bb70efa9564ff145bf01164a9c0`; the versioned release is a separate rebuild.
+
+Automated checks use inert DLLs with older, newer and aliased/ordinal-only export layouts and exercise real Windows loader calls by name and number. They also cover unchanged code bytes, malformed templates, personalized installation hashes, upgrade, rollback, repeated Apply and restore. These tests support portability; gameplay feedback still comes from one PC.
+
 ## v0.9.0 memory-check fix
 
 The tester played with the installed local memory-check fix and reported: "great that works!" The v0.9.0 release retains that runtime implementation, with release version labels and matching build metadata refreshed.

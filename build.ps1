@@ -61,7 +61,7 @@ try {
         $sourceHashes[$relative] = (Get-FileHash -LiteralPath (Join-Path $root $relative) -Algorithm SHA256).Hash
     }
     $manifest = [ordered]@{
-        SchemaVersion = 1; Version = '0.9.0'; TargetFPS = 120
+        SchemaVersion = 1; Version = '0.9.1'; TargetFPS = 120
         GameSHA256 = 'CC34E43BBD1F757E3883ADAF37D643C1A0FB2963967CA33AF7CB6CB8F54480C0'
         ModSHA256 = (Get-FileHash -LiteralPath $output -Algorithm SHA256).Hash
         HelperSHA256 = $helperHash
@@ -72,9 +72,10 @@ try {
         SourceHashes = $sourceHashes; Compiler = "Zig $compilerVersion; x86_64-windows-gnu O2; no FP contraction; warnings-as-errors"
         GameplayValidation = [ordered]@{
             UserReportedSuccess = $true; NativeAttachmentObserved = $false
-            TestedModSHA256 = '06CF53D9174E600D9745C16EB4F51B50C5568B41D831A6A5E534BFC000BEB3CC'
-            TestedHelperSHA256 = '898C59D575AFF5DD9F6CDB0F46A2DEB5F1700DF80A5DDFE2A86AE1C71B1DCB7A'
-            Scope = 'Earlier gameplay validation covers the bounded-memory runtime. Portable export-table installation is separately validated by offline loader and installer fixtures; these rebuilt binaries have not received new gameplay testing.'
+            TestedPackageSHA256 = 'D9F24329BA24B03BA332565DA512C9A1498D3B3C184B89578C5DA8EEBA15A33A'
+            TestedTemplateSHA256 = '3BD4E92CEB5DC5694DE39C419557F55286A02C560DEDB7B14729E93B8D4008EE'
+            TestedHelperSHA256 = '7536884CBDDB9CE07784708AB952E5D0F3BBCDBB9CE98D7C20F1C93EAA58BD31'
+            Scope = 'The tester reported that the local Windows-portability package works great on Steam build 7837297 with i9-13900K and RTX 4070. The tested hash describes its template, not the personalized installed DLL. Release version labels and build metadata are refreshed; forwarding and gameplay implementations are retained. Other Windows installations are covered by synthetic export-layout and installer tests, not additional gameplay reports.'
         }
         BuiltUTC = [DateTime]::UtcNow.ToString('o')
     }
