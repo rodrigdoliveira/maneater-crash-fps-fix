@@ -7,6 +7,11 @@
 #include <string.h>
 #include <wchar.h>
 #include <intrin.h>
+/* Installer-owned export storage. Only this non-executable section and the PE
+ * export-directory/checksum fields are personalized, before loading the DLL.
+ * The native implementation and its RVAs stay unchanged across Windows builds. */
+__attribute__((section(".dxgifwd"), used))
+const unsigned char maneater_dxgi_forwarding_space[65536] = {'M','E','C','F','F','W','D','1'};
 #if defined(_MSC_VER)
 #pragma intrinsic(_ReturnAddress)
 #define CALLER_RETURN_ADDRESS() _ReturnAddress()

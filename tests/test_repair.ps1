@@ -55,7 +55,8 @@ $template=Get-Content -LiteralPath (Join-Path $root 'dist\build.json') -Raw|Conv
 $tested=$gameHash -ceq $template.GameSHA256
 if(-not $tested -and -not $AllowUntestedBuild){throw 'Fixture unknown build needs opt-in.'}
 [IO.File]::Copy((Join-Path $root 'dist\fixture-system.dll'),(Join-Path $GameDirectory 'dxgi_codex_system.dll'),$false)
-[IO.File]::Copy((Join-Path $root 'dist\dxgi.dll'),(Join-Path $GameDirectory 'dxgi.dll'),$false)
+$personalized=Join-Path $root '.local/fixture-personalized-dxgi.dll'
+if([IO.File]::Exists($personalized)){[IO.File]::Copy($personalized,(Join-Path $GameDirectory 'dxgi.dll'),$false)}else{[IO.File]::Copy((Join-Path $root 'dist\dxgi.dll'),(Join-Path $GameDirectory 'dxgi.dll'),$false)}
 [IO.File]::Copy((Join-Path $root 'dist\ManeaterAreaHelper.exe'),(Join-Path $GameDirectory 'ManeaterAreaHelper.exe'),$false)
 $mode=Join-Path $root '.local\fail-native'
 if([IO.File]::Exists($mode)){throw 'Injected failure after native copies before installation record.'}
@@ -74,7 +75,7 @@ if([IO.File]::Exists((Join-Path $root '.local\fail-native-after-state'))){throw 
         function script:Assert-SteamManeaterInstallation {param($Context,$GameRoot) if($Context.ConfigPath -cne $script:FixtureContext.ConfigPath){throw 'Wrong fixture Steam context.'}}
         function script:Get-ManeaterCpuPlan {[pscustomobject]@{Apply=$false;Description='fixture CPU; no topology probe'}}
         function script:New-ManeaterLaunchOptions {param($ExistingOptions,$CpuPlan,[switch]$AllowUntestedBuild) 'cmd /c "set "OPENSSL_ia32cap=:~0x20000000" && set "MANEATER_FIX_ALLOW_UNTESTED='+$(if($AllowUntestedBuild){'1'}else{'0'})+'" && %command%"'}
-        function script:Get-RepairBuildReady {$true}
+        function script:Get-RepairBuildReady {param([switch]$Detailed) if($Detailed){[pscustomobject]@{Ready=$true;Code='Ready';Message='Fixture package ready.';InstalledModSHA256=(Get-RepairHash (Join-Path $script:Root 'dist/dxgi.dll'))}}else{$true}}
         function script:Get-RepairCompiler {throw 'Fixture must not download or run a compiler.'}
         function script:Get-VerifiedWindowsDxgi {[pscustomobject]@{Table=[pscustomobject]@{FileSHA256=$script:FixtureSystemHash}}}
         function script:Get-AuthenticodeSignature {param($LiteralPath) [pscustomobject]@{Status='Valid';SignerCertificate=[pscustomobject]@{Subject='O=Microsoft Corporation'}}}
@@ -131,6 +132,22 @@ function Use-RealBundleReadiness($Case){
         function script:Get-PeExportTable {param($Path) [pscustomobject]@{Path=$Path;FileSHA256=(Get-RepairHash $Path);ContractSHA256=$script:FixtureProxyContract}}
         function script:Assert-DxgiForwarderTable {param($Proxy,$System) if($Proxy.ContractSHA256 -cne $System.ContractSHA256){throw 'Fixture Windows export contract differs.'}}
     } $definitionText $Case.System $contract
+}
+function Use-PortableBundleReadiness($Case){
+    Use-RealBundleReadiness $Case
+    $file=Join-Path $Case.Root '.local/fixture-personalized-dxgi.dll'
+    [IO.File]::WriteAllText($file,'inert personalized wrapper; never executed')
+    $path=Join-Path $Case.Root 'dist/build.json';$manifest=Get-Content $path -Raw|ConvertFrom-Json
+    $manifest|Add-Member -NotePropertyName ForwardingMode -NotePropertyValue 'LocalExportTableV1'
+    [IO.File]::WriteAllText($path,($manifest|ConvertTo-Json -Depth 6))
+    & $Case.Module {
+        $script:FixtureExportContract='F'*64
+        function script:New-DxgiForwarderImage {
+            param($TemplatePath,$System)
+            [pscustomobject]@{FileSHA256=(Get-RepairHash (Join-Path $script:Root '.local/fixture-personalized-dxgi.dll'))}
+        }
+    }
+    return (Hash $file)
 }
 function Manual-Journal($Case,[string]$Action){
     $plan=& $Case.Module {param($Exe,$Context) Get-ManeaterRepairPlan -GameExecutable $Exe -SteamContext $Context} $Case.Exe $Case.Context
@@ -283,10 +300,10 @@ try{
     $case=New-Scenario 'owned-current';$oldRecord=Set-OldNative $case -SameHashes
     $plan=& $case.Module {param($Exe,$Context) Get-ManeaterRepairPlan -GameExecutable $Exe -SteamContext $Context} $case.Exe $case.Context
     Assert-Test ($plan.Native.Action -eq 'None' -and $plan.Native.OriginalNativeRecord.PreviousMetadata -ceq $oldRecord.PreviousMetadata) 'current owned pair preserved with captured record'
-    & $case.Module {function script:Get-RepairBuildReady {$false}}
+    & $case.Module {function script:Get-RepairBuildReady {param([switch]$Detailed) if($Detailed){[pscustomobject]@{Ready=$false;Code='FixtureFailure';Message='Fixture package unavailable.'}}else{$false}}}
     $plan=& $case.Module {param($Exe,$Context) Get-ManeaterRepairPlan -GameExecutable $Exe -SteamContext $Context} $case.Exe $case.Context
     Assert-Test ($plan.Native.Action -eq 'ReplaceRecognized') 'stale source/build readiness forces owned pair refresh'
-    & $case.Module {function script:Get-RepairBuildReady {$true}}
+    & $case.Module {function script:Get-RepairBuildReady {param([switch]$Detailed) if($Detailed){[pscustomobject]@{Ready=$true;Code='Ready';Message='Fixture package ready.';InstalledModSHA256=(Get-RepairHash (Join-Path $script:Root 'dist/dxgi.dll'))}}else{$true}}}
     $journal=Manual-Journal $case 'ReplaceRecognized'
     Restore-Case $case|Out-Null
     Assert-Test ((Same-NativeRecord $case $oldRecord) -and (Hash (Join-Path $case.Bin 'dxgi.dll')) -ceq $oldRecord.ModSHA256) 'identical owned old/new pair and prior record survive restore before backups'
@@ -338,21 +355,41 @@ try{
 
     $case=New-Scenario 'ready-bundle-only';Use-RealBundleReadiness $case
     Assert-Test ((& $case.Module {Get-RepairBuildReady})) 'complete prebuilt bundle passes actual provenance/export readiness'
+    $ready=& $case.Module {Get-RepairBuildReady -Detailed}
+    Assert-Test ($ready.Ready -and $ready.Code -ceq 'Ready' -and (& $case.Module {Get-RepairBuildReady}) -is [bool]) 'detailed readiness preserves the Boolean default contract'
     $journal=Invoke-Case $case
     Assert-Test ($journal.Status -ceq 'applied' -and (& $case.Module {$script:CompilerTripwireCount}) -eq 0 -and -not [IO.File]::Exists((Join-Path $case.Root '.local\build-was-called')) -and -not [IO.Directory]::Exists((Join-Path $case.Root '.local\tools'))) 'ready bundle applies without compiler/build/network fallback or tool cache'
     Restore-Case $case|Out-Null
 
-    foreach($failure in @('missing','damaged','stale','contract')){
+    foreach($failure in @('missing','manifest-missing','helper-missing','definition-missing','damaged','stale','source-missing','invalid-json','package-version','contract','windows-validation','proxy-forwarder')){
         $case=New-Scenario ('bundle-'+$failure);Use-RealBundleReadiness $case
+        $expectedCode='MissingBundleFiles'
         switch($failure){
             'missing'{[IO.File]::Delete($case.Mod)}
-            'damaged'{[IO.File]::WriteAllText($case.Mod,'damaged bundled proxy')}
-            'stale'{[IO.File]::AppendAllText((Join-Path $case.Root 'build.ps1'),"`n# source changed after bundling")}
-            'contract'{& $case.Module {$script:FixtureExportContract='F'*64}}
+            'manifest-missing'{[IO.File]::Delete((Join-Path $case.Root 'dist/build.json'))}
+            'helper-missing'{[IO.File]::Delete($case.Helper)}
+            'definition-missing'{[IO.File]::Delete((Join-Path $case.Root 'dist/dxgi_proxy.def'))}
+            'damaged'{[IO.File]::WriteAllText($case.Mod,'damaged bundled proxy');$expectedCode='BundleArtifactsChanged'}
+            'stale'{[IO.File]::AppendAllText((Join-Path $case.Root 'build.ps1'),"`n# source changed after bundling");$expectedCode='BundleSourcesChanged'}
+            'source-missing'{[IO.File]::Delete((Join-Path $case.Root 'src/maneater_fps_hook.c'));$expectedCode='BundleSourcesChanged'}
+            'invalid-json'{[IO.File]::WriteAllText((Join-Path $case.Root 'dist/build.json'),'{invalid');$expectedCode='InvalidBundleManifest'}
+            'package-version'{$buildPath=Join-Path $case.Root 'dist/build.json';$build=Get-Content $buildPath -Raw|ConvertFrom-Json;$build.Version='0.8.0';[IO.File]::WriteAllText($buildPath,($build|ConvertTo-Json -Depth 6));$expectedCode='InvalidBundleManifest'}
+            'contract'{& $case.Module {$script:FixtureExportContract='F'*64};$expectedCode='WindowsGraphicsMismatch'}
+            'windows-validation'{& $case.Module {function script:Get-VerifiedWindowsDxgi {throw 'Fixture Microsoft signature check failed.'}};$expectedCode='WindowsGraphicsValidationFailed'}
+            'proxy-forwarder'{& $case.Module {function script:Assert-DxgiForwarderTable {param($Proxy,$System) throw 'Fixture export forwarding failed.'}};$expectedCode='InvalidBundleProxy'}
         }
+        $diagnostic=& $case.Module {Get-RepairBuildReady -Detailed}
+        Assert-Test (-not $diagnostic.Ready -and $diagnostic.Code -ceq $expectedCode -and -not (& $case.Module {Get-RepairBuildReady})) "$failure is classified without changing Boolean refusal"
         & $case.Module {$script:WritableProbeCount=0;function script:Assert-RepairWritable {param($Directory) $script:WritableProbeCount++;throw 'Writable probe tripwire'}}
         $message='';try{Invoke-Case $case|Out-Null}catch{$message=$_.Exception.Message}
-        Assert-Test ($message -like 'The ready-to-run mod bundle*' -and $message -match 'release ZIP' -and $message -match 'build.ps1') "$failure bundle fails with ready-release/manual-build action"
+        Assert-Test ($message.StartsWith($diagnostic.Message) -and $message -match ('Diagnostic code: '+$expectedCode) -and $message -match 'No game files or settings changed') "$failure repair displays classified diagnostic and code"
+        $report=Get-Content (Join-Path $case.Root '.local/diagnostics/bundle-error.json') -Raw|ConvertFrom-Json
+        Assert-Test ($report.Code -ceq $expectedCode -and $report.Detail -ceq $diagnostic.Detail -and $report.WindowsVersion -and $report.PackageVersion -eq $diagnostic.PackageVersion) "$failure diagnostic report records the actual cause and Windows/package versions"
+        if($expectedCode -like 'WindowsGraphics*'){
+            Assert-Test ($message -match 'winver' -and $message -notmatch 'incomplete|extract|build.ps1') "$failure reports Windows verification/compatibility instead of missing files"
+        }else{
+            Assert-Test ($message -match 'Maneater-Crash-FPS-Fix.zip' -and $message -match 'build.ps1') "$failure names the ready-to-run asset and developer build option"
+        }
         Assert-Test ((& $case.Module {$script:WritableProbeCount}) -eq 0 -and (& $case.Module {$script:CompilerTripwireCount}) -eq 0 -and -not [IO.File]::Exists((Join-Path $case.Root '.local\build-was-called'))) "$failure bundle stops before writable probes/compiler/build fallback"
         Assert-Test ((Same-Config $case) -and [IO.File]::Exists($case.Ansel) -and -not [IO.File]::Exists((Join-Path $case.Root '.local\repair.json')) -and -not [IO.Directory]::Exists((Join-Path $case.Root '.local\backups')) -and -not [IO.File]::Exists((Join-Path $case.Bin 'dxgi.dll'))) "$failure bundle writes no repair journal/backups/game/settings"
     }
@@ -380,7 +417,7 @@ try{
         [IO.File]::WriteAllText($manifestPath,($manifest|ConvertTo-Json -Depth 6))
         & $case.Module {$script:WritableProbeCount=0;function script:Assert-RepairWritable {param($Directory) $script:WritableProbeCount++;throw 'Writable probe tripwire'}}
         $message='';try{Invoke-Case $case|Out-Null}catch{$message=$_.Exception.Message}
-        Assert-Test ($message -like 'The ready-to-run mod bundle*') "$corruption manifest is refused during ready-package preflight"
+        Assert-Test ($message -like 'The mod package failed verification.*') "$corruption manifest is refused during ready-package preflight"
         Assert-Test ((& $case.Module {$script:WritableProbeCount}) -eq 0 -and (& $case.Module {$script:CompilerTripwireCount}) -eq 0 -and -not [IO.File]::Exists((Join-Path $case.Root '.local\repair.json')) -and -not [IO.Directory]::Exists((Join-Path $case.Root '.local\backups'))) "$corruption manifest creates no writable probe/journal/backup/fallback"
         Assert-Test ((Same-NativeRecord $case $oldRecord) -and (Hash (Join-Path $case.Bin 'dxgi.dll')) -ceq $oldRecord.ModSHA256 -and (Hash (Join-Path $case.Bin 'dxgi_codex_system.dll')) -ceq $oldRecord.SystemSHA256 -and (Same-Config $case) -and [IO.File]::Exists($case.Ansel)) "$corruption manifest preserves an owned upgrade's old pair/state/settings"
     }

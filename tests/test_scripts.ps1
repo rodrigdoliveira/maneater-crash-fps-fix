@@ -89,7 +89,9 @@ try {
     $different = [pscustomobject]@{ ContractSHA256 = 'different'; Exports = $valid.Exports }
     Assert-Throws { Assert-DxgiForwarderTable $valid $different } 'different system contract refused'
     $ordinalOnly = Join-Path $testRoot 'ordinal-only.dll'; New-FixturePe $fixtureExports $ordinalOnly -OrdinalOnly | Out-Null
-    Assert-Throws { Get-PeExportTable $ordinalOnly } 'ordinal-only export refused'
+    $ordinalTable=Get-PeExportTable $ordinalOnly
+    Assert-Test ($ordinalTable.Exports.Count-eq3-and$null-eq$ordinalTable.Exports[2].Name) 'ordinal-only export parsed without inventing a name'
+    Assert-Throws {New-DxgiForwarderDefinition $ordinalTable.Exports $definition} 'legacy build definitions refuse unnamed exports'
     foreach ($mutation in @('DOS', 'NTOffset', 'Machine', 'ExportCount', 'NameRva', 'NameOrdinal')) {
         $bytes = [byte[]]$original.Clone()
         switch ($mutation) {

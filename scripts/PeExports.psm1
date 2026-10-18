@@ -63,11 +63,15 @@ function Get-ExportContractHash {
 }
 function Get-PeExportTable {
     [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][string]$Path)
-    $resolved = (Resolve-Path -LiteralPath $Path).ProviderPath
-    $file = Get-Item -LiteralPath $resolved
-    if ($file.PSIsContainer -or $file.Length -gt 33554432) { throw 'Unsupported PE: expected a DLL no larger than 32 MiB.' }
-    $bytes = [IO.File]::ReadAllBytes($resolved)
+    param([Parameter(Mandatory = $true,ParameterSetName='File',Position=0)][string]$Path,
+          [Parameter(Mandatory = $true,ParameterSetName='Bytes')][byte[]]$Bytes)
+    if($PSCmdlet.ParameterSetName -eq 'File'){
+        $resolved = (Resolve-Path -LiteralPath $Path).ProviderPath
+        $file = Get-Item -LiteralPath $resolved
+        if ($file.PSIsContainer -or $file.Length -gt 33554432) { throw 'Unsupported PE: expected a DLL no larger than 32 MiB.' }
+        $bytes = [IO.File]::ReadAllBytes($resolved)
+    }
+    if($bytes.Length -gt 33554432){throw 'Unsupported PE: expected a DLL no larger than 32 MiB.'}
     if ((Read-U16 $bytes 0) -ne 0x5a4d) { throw 'Malformed PE: DOS signature is missing.' }
     $pe = [long](Read-U32 $bytes 60)
     if ((Read-U32 $bytes $pe) -ne 0x4550) { throw 'Malformed PE: NT signature is missing.' }
@@ -92,6 +96,7 @@ function Get-PeExportTable {
         $at = $optional + $optionalSize + $index * 40
         Assert-ByteRange $bytes $at 40
         $section = [pscustomobject]@{
+            Name = [Text.Encoding]::ASCII.GetString($bytes,[int]$at,8).TrimEnd([char]0)
             VirtualSize = [long](Read-U32 $bytes ($at + 8)); VirtualAddress = [long](Read-U32 $bytes ($at + 12))
             RawSize = [long](Read-U32 $bytes ($at + 16)); RawOffset = [long](Read-U32 $bytes ($at + 20))
             Flags = Read-U32 $bytes ($at + 36)
@@ -116,11 +121,14 @@ function Get-PeExportTable {
     $ordinalBase = [long](Read-U32 $bytes ($directory + 16))
     $functionCount = [long](Read-U32 $bytes ($directory + 20))
     $nameCount = [long](Read-U32 $bytes ($directory + 24))
-    if ($functionCount -lt 1 -or $functionCount -gt 65535 -or $nameCount -lt 1 -or $nameCount -gt $functionCount -or
+    if ($functionCount -lt 1 -or $functionCount -gt 65535 -or $nameCount -gt 65535 -or
         $ordinalBase -lt 1 -or ($ordinalBase + $functionCount - 1) -gt 65535) { throw 'Malformed or unsupported PE: export counts/ordinals are invalid.' }
     $functions = Convert-RvaOffset $bytes $sections $headerSize (Read-U32 $bytes ($directory + 28)) ($functionCount * 4)
-    $names = Convert-RvaOffset $bytes $sections $headerSize (Read-U32 $bytes ($directory + 32)) ($nameCount * 4)
-    $ordinals = Convert-RvaOffset $bytes $sections $headerSize (Read-U32 $bytes ($directory + 36)) ($nameCount * 2)
+    $names=0L;$ordinals=0L
+    if($nameCount){
+        $names = Convert-RvaOffset $bytes $sections $headerSize (Read-U32 $bytes ($directory + 32)) ($nameCount * 4)
+        $ordinals = Convert-RvaOffset $bytes $sections $headerSize (Read-U32 $bytes ($directory + 36)) ($nameCount * 2)
+    }
     $namedOrdinals = @{}; $seenNames = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
     $exports = @()
     for ($index = 0; $index -lt $nameCount; ++$index) {
@@ -129,7 +137,6 @@ function Get-PeExportTable {
         if (-not $seenNames.Add($name)) { throw 'Malformed PE: duplicate export name.' }
         $ordinalIndex = [long](Read-U16 $bytes ($ordinals + $index * 2))
         if ($ordinalIndex -ge $functionCount) { throw 'Malformed PE: name ordinal is outside the function table.' }
-        if ($namedOrdinals.ContainsKey($ordinalIndex)) { throw 'Unsupported PE: multiple names share an ordinal.' }
         $namedOrdinals[$ordinalIndex] = $true
         $functionRva = [long](Read-U32 $bytes ($functions + $ordinalIndex * 4))
         if ($functionRva -eq 0) { throw 'Malformed PE: named export has no function.' }
@@ -144,8 +151,12 @@ function Get-PeExportTable {
         $exports += [pscustomobject]@{ Name = $name; Ordinal = $ordinalBase + $ordinalIndex; Forwarder = $forwarder }
     }
     for ($index = 0; $index -lt $functionCount; ++$index) {
-        if ((Read-U32 $bytes ($functions + $index * 4)) -ne 0 -and -not $namedOrdinals.ContainsKey([long]$index)) {
-            throw 'Unsupported PE: ordinal-only exports cannot be represented by this source-only forwarder.'
+        $functionRva=[long](Read-U32 $bytes ($functions + $index * 4))
+        if ($functionRva -ne 0 -and -not $namedOrdinals.ContainsKey([long]$index)) {
+            $forwarder=$null
+            if($functionRva -ge $exportRva -and $functionRva -lt ($exportRva+$exportSize)){$forwarder=Read-PeAscii $bytes $sections $headerSize $functionRva}
+            elseif(@($sections|Where-Object {$functionRva -ge $_.VirtualAddress -and $functionRva -lt ($_.VirtualAddress+[Math]::Max($_.VirtualSize,$_.RawSize)) -and ($_.Flags-band 0x20000000)-ne0}).Count -ne 1){throw 'Unsupported PE: ordinal-only function is not executable.'}
+            $exports += [pscustomobject]@{Name=$null;Ordinal=$ordinalBase+$index;Forwarder=$forwarder}
         }
     }
     $exports = @($exports | Sort-Object Ordinal)
@@ -153,12 +164,74 @@ function Get-PeExportTable {
     try { $fileHash = ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '') }
     finally { $sha.Dispose() }
     return [pscustomobject]@{ Machine = 'AMD64'; Is64Bit = $true; ExportBase = $ordinalBase; Exports = $exports
-        FileSHA256 = $fileHash; ContractSHA256 = Get-ExportContractHash $exports }
+        FileSHA256 = $fileHash; ContractSHA256 = Get-ExportContractHash $exports; Sections=$sections; ExportDirectoryFieldOffset=$optional+112; ChecksumOffset=$optional+64 }
+}
+
+function New-DxgiForwarderImage {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true)][string]$TemplatePath,[Parameter(Mandatory=$true)]$System)
+    $bytes=[IO.File]::ReadAllBytes($TemplatePath)
+    $template=Get-PeExportTable -Bytes $bytes
+    $slots=@($template.Sections|Where-Object {$_.Name -ceq '.dxgifwd'})
+    if($slots.Count-ne1){throw 'The compiled mod lacks its portable graphics section. Rebuild the mod package.'}
+    $slot=$slots[0]
+    if($slot.VirtualSize-ne65536-or$slot.RawSize-lt65536-or($slot.Flags-band 0xE0000000)-ne0x40000000){throw 'Invalid portable graphics section bounds or permissions.'}
+    $start=[int]$slot.RawOffset;$rva=[uint32]$slot.VirtualAddress
+    if([Text.Encoding]::ASCII.GetString($bytes,$start,8)-cne'MECFFWD1'){throw 'The portable graphics template marker is missing.'}
+    for($i=$start+8;$i-lt$start+65536;$i++){if($bytes[$i]-ne0){throw 'The portable graphics template was already changed.'}}
+    $exports=@($System.Exports)
+    if(-not$exports.Count-or$exports.Count-gt512){throw 'Unsupported Windows graphics export count (maximum 512).'}
+    $names=[Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
+    $ordinals=[Collections.Generic.HashSet[int]]::new()
+    $min=65536;$max=0
+    foreach($e in $exports){
+        $o=[int]$e.Ordinal
+        if($o-lt1-or$o-gt65535){throw 'Invalid Windows graphics function ordinal.'}
+        $null=$ordinals.Add($o);$min=[Math]::Min($min,$o);$max=[Math]::Max($max,$o)
+        if($null-ne$e.Name){
+            if($e.Name-cnotmatch'^[A-Za-z_][A-Za-z0-9_]{0,127}$'-or$names.ContainsKey($e.Name)){throw 'Invalid or duplicated Windows graphics function name.'}
+            $names.Add($e.Name,$e)
+        }
+    }
+    $count=$max-$min+1
+    if($count-gt4096){throw 'Unsupported Windows graphics ordinal range (maximum 4096 slots).'}
+    $data=New-Object byte[] 65536
+    $functions=40;$nameTable=$functions+4*$count;$ordinalTable=$nameTable+4*$names.Count
+    $cursor=$ordinalTable+2*$names.Count
+    function Put-ForwardU32([int]$Offset,[uint32]$Value){[Array]::Copy([BitConverter]::GetBytes($Value),0,$data,$Offset,4)}
+    function Put-ForwardString([string]$Text){
+        $encoded=[Text.Encoding]::ASCII.GetBytes($Text+[char]0)
+        if($cursor+$encoded.Length-gt$data.Length){throw 'Windows graphics export data exceeds the portable section capacity.'}
+        [Array]::Copy($encoded,0,$data,$cursor,$encoded.Length)
+        $scriptValue=[uint32]($rva+$cursor)
+        Set-Variable -Scope 1 -Name cursor -Value ($cursor+$encoded.Length)
+        return $scriptValue
+    }
+    $dllName=Put-ForwardString 'dxgi.dll'
+    Put-ForwardU32 12 $dllName;Put-ForwardU32 16 $min;Put-ForwardU32 20 $count;Put-ForwardU32 24 $names.Count
+    Put-ForwardU32 28 ($rva+$functions)
+    if($names.Count){Put-ForwardU32 32 ($rva+$nameTable);Put-ForwardU32 36 ($rva+$ordinalTable)}
+    foreach($o in @($ordinals|Sort-Object)){
+        $address=Put-ForwardString ('dxgi_codex_system.#'+$o)
+        Put-ForwardU32 ($functions+4*($o-$min)) $address
+    }
+    [string[]]$sorted=@($names.Keys);[Array]::Sort($sorted,[StringComparer]::Ordinal)
+    for($i=0;$i-lt$sorted.Count;$i++){
+        $address=Put-ForwardString $sorted[$i];Put-ForwardU32 ($nameTable+4*$i) $address
+        [Array]::Copy([BitConverter]::GetBytes([uint16]([int]$names[$sorted[$i]].Ordinal-$min)),0,$data,$ordinalTable+2*$i,2)
+    }
+    [Array]::Copy($data,0,$bytes,$start,$data.Length)
+    [Array]::Copy([BitConverter]::GetBytes($rva),0,$bytes,[int]$template.ExportDirectoryFieldOffset,4)
+    [Array]::Copy([BitConverter]::GetBytes([uint32]$cursor),0,$bytes,[int]$template.ExportDirectoryFieldOffset+4,4)
+    [Array]::Clear($bytes,[int]$template.ChecksumOffset,4)
+    $adapted=Get-PeExportTable -Bytes $bytes
+    Assert-DxgiForwarderTable -Proxy $adapted -System $System -Portable
+    return [pscustomobject]@{Bytes=$bytes;FileSHA256=$adapted.FileSHA256;Table=$adapted}
 }
 function New-DxgiForwarderDefinition {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][object[]]$Exports, [Parameter(Mandatory = $true)][string]$Path)
-    $lines = @('; Generated from the local Windows DXGI named-export contract.', 'LIBRARY dxgi', 'EXPORTS')
+    $lines = @('; Named forwarding template; portable installation supplies the local Windows export table.', 'LIBRARY dxgi', 'EXPORTS')
     foreach ($entry in @($Exports | Sort-Object Ordinal)) {
         if ($entry.Name -notmatch '^[A-Za-z_][A-Za-z0-9_]*$' -or $entry.Ordinal -lt 1 -or $entry.Ordinal -gt 65535) { throw 'Invalid forwarder export entry.' }
         $lines += '    {0}=dxgi_codex_system.{0} @{1}' -f $entry.Name, $entry.Ordinal
@@ -167,12 +240,13 @@ function New-DxgiForwarderDefinition {
 }
 function Assert-DxgiForwarderTable {
     [CmdletBinding()]
-    param([Parameter(Mandatory = $true)]$Proxy, [Parameter(Mandatory = $true)]$System)
+    param([Parameter(Mandatory = $true)]$Proxy, [Parameter(Mandatory = $true)]$System,[switch]$Portable)
     if ($Proxy.ContractSHA256 -cne $System.ContractSHA256 -or $Proxy.Exports.Count -ne $System.Exports.Count) {
         throw 'DXGI export contract differs; rebuild on this Windows installation.'
     }
     foreach ($entry in $Proxy.Exports) {
-        if ($entry.Forwarder -cne ('dxgi_codex_system.' + $entry.Name)) { throw 'Proxy contains an unexpected non-forwarded export.' }
+        $expected=$(if($Portable){'dxgi_codex_system.#'+$entry.Ordinal}else{'dxgi_codex_system.'+$entry.Name})
+        if ($entry.Forwarder -cne $expected -and ($Portable -or $entry.Forwarder -cne ('dxgi_codex_system.#'+$entry.Ordinal))) { throw 'Proxy contains an unexpected non-forwarded export.' }
     }
 }
 function Get-VerifiedWindowsDxgi {
@@ -193,4 +267,4 @@ function Get-VerifiedWindowsDxgi {
     }
     return [pscustomobject]@{ Path = $path; Table = $table }
 }
-Export-ModuleMember -Function Get-PeExportTable, Get-ExportContractHash, New-DxgiForwarderDefinition, Assert-DxgiForwarderTable, Get-VerifiedWindowsDxgi
+Export-ModuleMember -Function Get-PeExportTable, Get-ExportContractHash, New-DxgiForwarderDefinition, New-DxgiForwarderImage, Assert-DxgiForwarderTable, Get-VerifiedWindowsDxgi

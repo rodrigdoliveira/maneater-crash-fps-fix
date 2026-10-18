@@ -21,7 +21,9 @@ $dist = Join-Path $root 'dist'
 $definition = Join-Path $dist 'dxgi_proxy.def'
 $output = Join-Path $dist 'dxgi.dll'
 $temporary = Join-Path $dist ('dxgi-build-' + [Guid]::NewGuid().ToString('N') + '.dll')
-New-DxgiForwarderDefinition -Exports $system.Table.Exports -Path $definition
+$baseExports=@([pscustomobject]@{Name='CreateDXGIFactory';Ordinal=1},[pscustomobject]@{Name='CreateDXGIFactory1';Ordinal=2},[pscustomobject]@{Name='CreateDXGIFactory2';Ordinal=3})
+$baseContract=[pscustomobject]@{Exports=$baseExports;ContractSHA256=(Get-ExportContractHash $baseExports)}
+New-DxgiForwarderDefinition -Exports $baseExports -Path $definition
 $savedGlobalCache = $env:ZIG_GLOBAL_CACHE_DIR
 $savedLocalCache = $env:ZIG_LOCAL_CACHE_DIR
 try {
@@ -41,7 +43,8 @@ try {
     & $ZigPath @flags -shared @sources $definition -o $temporary -lkernel32 -lbcrypt
     if ($LASTEXITCODE -ne 0) { throw "Compilation failed with exit code $LASTEXITCODE." }
     $proxy = Get-PeExportTable -Path $temporary
-    Assert-DxgiForwarderTable -Proxy $proxy -System $system.Table
+    Assert-DxgiForwarderTable -Proxy $proxy -System $baseContract
+    $null=New-DxgiForwarderImage -TemplatePath $temporary -System $system.Table
     # Detect servicing/replacement while building; the recorded hash is local
     # provenance, never a fixed hash that other Windows installations must use.
     $currentSystem = Get-VerifiedWindowsDxgi
@@ -63,14 +66,15 @@ try {
         ModSHA256 = (Get-FileHash -LiteralPath $output -Algorithm SHA256).Hash
         HelperSHA256 = $helperHash
         DefinitionSHA256 = (Get-FileHash -LiteralPath $definition -Algorithm SHA256).Hash
-        SystemExportsSHA256 = $system.Table.ContractSHA256; ModExportsSHA256 = $proxy.ContractSHA256
-        BuildSystemDLLSHA256 = $system.Table.FileSHA256; SystemExports = @($system.Table.Exports | Select-Object Name, Ordinal)
+        ForwardingMode = 'LocalExportTableV1'
+        SystemExportsSHA256 = $baseContract.ContractSHA256; ModExportsSHA256 = $proxy.ContractSHA256
+        BuildSystemDLLSHA256 = $system.Table.FileSHA256; SystemExports = $baseExports
         SourceHashes = $sourceHashes; Compiler = "Zig $compilerVersion; x86_64-windows-gnu O2; no FP contraction; warnings-as-errors"
         GameplayValidation = [ordered]@{
             UserReportedSuccess = $true; NativeAttachmentObserved = $false
             TestedModSHA256 = '06CF53D9174E600D9745C16EB4F51B50C5568B41D831A6A5E534BFC000BEB3CC'
             TestedHelperSHA256 = '898C59D575AFF5DD9F6CDB0F46A2DEB5F1700DF80A5DDFE2A86AE1C71B1DCB7A'
-            Scope = 'User confirmed the installed bounded-memory hotfix works on the reference Steam build and Intel test PC. This release retains that runtime implementation; version labels and build provenance were refreshed. Tested hashes identify the local gameplay-tested binaries, not this rebuilt DLL.'
+            Scope = 'Earlier gameplay validation covers the bounded-memory runtime. Portable export-table installation is separately validated by offline loader and installer fixtures; these rebuilt binaries have not received new gameplay testing.'
         }
         BuiltUTC = [DateTime]::UtcNow.ToString('o')
     }

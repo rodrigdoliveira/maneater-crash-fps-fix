@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param([ValidateSet('Install', 'Uninstall', 'Status')][string]$Action = 'Status', [string]$GameDirectory,
-      [switch]$AllowUntestedBuild, [ValidatePattern('^[0-9A-Fa-f]{64}$')][string]$ExpectedGameSHA256)
+      [switch]$AllowUntestedBuild, [ValidatePattern('^[0-9A-Fa-f]{64}$')][string]$ExpectedGameSHA256,
+      [ValidatePattern('^[0-9A-Fa-f]{64}$')][string]$ExpectedModSHA256,
+      [ValidatePattern('^[0-9A-Fa-f]{64}$')][string]$ExpectedSystemSHA256)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = [IO.Path]::GetFullPath($PSScriptRoot)
@@ -163,16 +165,24 @@ foreach ($relative in $requiredSources) {
 }
 if ((Get-Hash $modSource) -ine $manifest.ModSHA256 -or (Get-Hash $definition) -ine $manifest.DefinitionSHA256 -or (Get-Hash $helperSource) -cne $manifest.HelperSHA256) { throw 'Built files changed; rebuild before installing.' }
 $system = Get-VerifiedWindowsDxgi
-if ($system.Table.ContractSHA256 -cne $manifest.SystemExportsSHA256 -or
-    (Get-ExportContractHash -Exports @($manifest.SystemExports)) -cne $manifest.SystemExportsSHA256) { throw 'Windows DXGI export contract changed; rebuild before installing.' }
+if ((Get-ExportContractHash -Exports @($manifest.SystemExports)) -cne $manifest.SystemExportsSHA256) { throw 'The packaged graphics manifest failed verification.' }
 $proxy = Get-PeExportTable -Path $modSource
 if ($proxy.FileSHA256 -cne $manifest.ModSHA256 -or $proxy.ContractSHA256 -cne $manifest.ModExportsSHA256) {
     throw 'Proxy changed during validation or differs from its build manifest.'
 }
-Assert-DxgiForwarderTable -Proxy $proxy -System $system.Table
+$portable=$null-ne$manifest.PSObject.Properties['ForwardingMode']
+$adapted=$null
+if($portable){
+    if($manifest.ForwardingMode-cne'LocalExportTableV1'){throw 'Unsupported graphics forwarding mode.'}
+    $baseContract=[pscustomobject]@{ContractSHA256=$manifest.SystemExportsSHA256;Exports=$manifest.SystemExports}
+    Assert-DxgiForwarderTable -Proxy $proxy -System $baseContract
+    $adapted=New-DxgiForwarderImage -TemplatePath $modSource -System $system.Table
+}else{Assert-DxgiForwarderTable -Proxy $proxy -System $system.Table}
 $modTarget = Join-Path $bin 'dxgi.dll'; $systemTarget = Join-Path $bin 'dxgi_codex_system.dll'; $helperTarget = Join-Path $bin 'ManeaterAreaHelper.exe'
 foreach ($target in @($modTarget, $systemTarget, $helperTarget)) { if (Test-Path -LiteralPath $target) { throw "Existing file preserved: $target" } }
-$systemHash = $system.Table.FileSHA256; $modHash = [string]$manifest.ModSHA256; $helperHash = [string]$manifest.HelperSHA256; $copiedSystem = $false; $copiedMod = $false; $copiedHelper = $false
+$systemHash = $system.Table.FileSHA256; $modHash = $(if($portable){$adapted.FileSHA256}else{[string]$manifest.ModSHA256}); $helperHash = [string]$manifest.HelperSHA256; $copiedSystem = $false; $copiedMod = $false; $copiedHelper = $false
+if($ExpectedModSHA256 -and $modHash -ine $ExpectedModSHA256){throw 'The prepared graphics wrapper changed since preflight. Retry Apply; nothing installed.'}
+if($ExpectedSystemSHA256 -and $systemHash -ine $ExpectedSystemSHA256){throw 'Windows graphics changed since preflight. Retry Apply; nothing installed.'}
 Assert-GameClosed
 $copyGameHash = Get-Hash $gameExe
 if ($copyGameHash -cne $gameHash) { throw 'Game executable changed during preparation; nothing installed. Select it again.' }
@@ -181,9 +191,10 @@ $stageMod = Join-Path $bin ('native-mod-' + [Guid]::NewGuid().ToString('N') + '.
 $stageHelper = Join-Path $bin ('native-helper-' + [Guid]::NewGuid().ToString('N') + '.tmp')
 try {
     [IO.File]::Copy($system.Path,$stageSystem,$false)
-    [IO.File]::Copy($modSource,$stageMod,$false)
+    if($portable){[IO.File]::WriteAllBytes($stageMod,$adapted.Bytes)}else{[IO.File]::Copy($modSource,$stageMod,$false)}
     [IO.File]::Copy($helperSource,$stageHelper,$false)
-    if ((Get-Hash $stageSystem) -cne $systemHash -or (Get-Hash $stageMod) -cne $modHash -or (Get-Hash $stageHelper) -cne $helperHash) { throw 'Staged native tuple changed; nothing published.' }
+    if ((Get-Hash $stageSystem) -cne $systemHash -or (Get-Hash $stageMod) -cne $modHash -or (Get-Hash $stageHelper) -cne $helperHash -or (Get-Hash $modSource) -cne $manifest.ModSHA256) { throw 'Staged native tuple changed; nothing published.' }
+    if($portable){Assert-DxgiForwarderTable -Proxy (Get-PeExportTable $stageMod) -System (Get-PeExportTable $stageSystem) -Portable}
     Assert-GameClosed
     if ((Get-Hash $gameExe) -cne $gameHash) { throw 'Game executable changed before native publication.' }
     if ($null -ne $stateExpectedHash -and (-not [IO.File]::Exists($statePath) -or (Get-Hash $statePath) -cne $stateExpectedHash)) { throw 'Native ownership record changed during preparation.' }

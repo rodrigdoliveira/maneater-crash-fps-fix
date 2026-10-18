@@ -1,6 +1,8 @@
 {
   "Version": "0.9.0",
   "SourceFiles": [
+    "tests/dxgi_portable_fixture.c",
+    "tests/run_dxgi_portable_tests.ps1",
     ".gitattributes",
     ".gitignore",
     "CONTRIBUTING.md",

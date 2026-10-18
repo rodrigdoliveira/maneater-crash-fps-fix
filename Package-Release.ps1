@@ -106,14 +106,17 @@ try{
     }
     if((Release-Hash (Join-Path $payloadDist 'dxgi_proxy.def')) -cne $manifest.DefinitionSHA256){throw 'Prebuilt forwarder definition hash differs from manifest.'}
     $proxy=Get-PeExportTable (Join-Path $payloadDist 'dxgi.dll')
-    if($proxy.FileSHA256 -cne $manifest.ModSHA256 -or $proxy.Exports.Count -ne 20 -or
+    if($proxy.FileSHA256 -cne $manifest.ModSHA256 -or $proxy.Exports.Count -lt 2 -or
         $proxy.ContractSHA256 -cne $manifest.ModExportsSHA256 -or
-        @($manifest.SystemExports).Count -ne 20 -or
+        @($manifest.SystemExports).Count -ne $proxy.Exports.Count -or
         (Get-ExportContractHash $manifest.SystemExports) -cne $manifest.SystemExportsSHA256){throw 'Native hash/export provenance differs from manifest.'}
     $manifestContract=[pscustomobject]@{ContractSHA256=$manifest.SystemExportsSHA256;Exports=$manifest.SystemExports}
     Assert-DxgiForwarderTable -Proxy $proxy -System $manifestContract
     $system=Get-VerifiedWindowsDxgi
-    Assert-DxgiForwarderTable -Proxy $proxy -System $system.Table
+    if($null-ne$manifest.PSObject.Properties['ForwardingMode']){
+        if($manifest.ForwardingMode-cne'LocalExportTableV1'){throw 'Unknown portable graphics format.'}
+        $null=New-DxgiForwarderImage -TemplatePath (Join-Path $payloadDist 'dxgi.dll') -System $system.Table
+    }else{Assert-DxgiForwarderTable -Proxy $proxy -System $system.Table}
     $imports=@(Get-ReleaseImports (Join-Path $payloadDist 'dxgi.dll'))
     $helperImports=@(Get-ReleaseImports (Join-Path $payloadDist 'ManeaterAreaHelper.exe'))
     $allowedImports=@('kernel32.dll','bcrypt.dll','api-ms-win-crt-runtime-l1-1-0.dll','api-ms-win-crt-stdio-l1-1-0.dll','api-ms-win-crt-heap-l1-1-0.dll','api-ms-win-crt-string-l1-1-0.dll','api-ms-win-crt-math-l1-1-0.dll','api-ms-win-crt-convert-l1-1-0.dll','api-ms-win-crt-locale-l1-1-0.dll','api-ms-win-crt-private-l1-1-0.dll','api-ms-win-crt-environment-l1-1-0.dll')

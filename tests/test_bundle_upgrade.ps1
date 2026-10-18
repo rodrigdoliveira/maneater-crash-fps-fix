@@ -46,6 +46,21 @@ try{
     Assert-Test ($updated.Plan.Native.Action-ceq'ReplaceRecognized') 'first real change acquires reversible ownership'
     Restore-Case $case|Out-Null
     Assert-Test ((Same-NativeRecord $case $original)-and(Hash (Join-Path $case.Bin 'dxgi.dll'))-ceq$original.ModSHA256-and(Hash (Join-Path $case.Bin 'ManeaterAreaHelper.exe'))-ceq$original.HelperSHA256) 'preexisting pair and ownership restored after upgrade'
+    $case=New-Scenario 'portable-upgrade' -PackageVersion '0.8.0';$first=Invoke-Case $case
+    $baseHash=Hash $case.Mod;$personalizedHash=Use-PortableBundleReadiness $case
+    $updated=Invoke-Case $case
+    Assert-Test ($updated.Plan.Native.InstalledHash-ceq$personalizedHash-and$personalizedHash-cne$baseHash-and(Hash $updated.Plan.Native.ModPath)-ceq$personalizedHash) 'portable upgrade records personalized bytes rather than template hash'
+    Assert-Test ((Test-CaseState $case $updated).Valid-and-not(Test-CaseState $case $updated).BundleUpdateAvailable) 'personalized installation is valid and does not report an endless update'
+    $reapplied=Invoke-Case $case
+    Assert-Test ($reapplied.BackupDirectory-ceq$first.BackupDirectory-and$reapplied.Plan.Native.InstalledHash-ceq$personalizedHash) 'repeated Apply retains original backup and personalized ownership'
+    Restore-Case $case|Out-Null
+    Assert-Test ((Same-Config $case)-and-not[IO.File]::Exists((Join-Path $case.Bin 'dxgi.dll'))) 'portable upgrade restores the original pre-repair setup'
+    $case=New-Scenario 'portable-rollback' -PackageVersion '0.8.0';$first=Invoke-Case $case
+    $oldMod=Hash $first.Plan.Native.ModPath;$oldState=Get-Content (Join-Path $case.Root '.local/installation.json') -Raw|ConvertFrom-Json
+    $null=Use-PortableBundleReadiness $case
+    [IO.File]::WriteAllText((Join-Path $case.Root '.local/fail-native-after-state'),'injected')
+    Assert-Throws {Invoke-Case $case} 'portable upgrade interruption triggers recovery'
+    Assert-Test ((Hash $first.Plan.Native.ModPath)-ceq$oldMod-and(Same-NativeRecord $case $oldState)-and(Read-Journal $case).Status-ceq'applied') 'portable rollback restores exact previous native bytes and ownership'
     Write-Output "PASS: $script:passed applied-bundle update and original-restore contracts. No real game or native executable used."
 }finally{
     $full=[IO.Path]::GetFullPath($testRoot);$prefix=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')+'\'

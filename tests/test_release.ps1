@@ -43,7 +43,7 @@ try{
     $release=Package-Fixture
     Assert-Test ([IO.File]::Exists($release.ZipPath) -and $release.SHA256 -ceq (Hash $release.ZipPath)) 'ready ZIP returned with verified output hash'
     Assert-Test ($release.SourceCommit -ceq [string](Fixture-Git -Arguments @('rev-parse','HEAD')) -and $release.SourceTree -ceq [string](Fixture-Git -Arguments @('rev-parse','HEAD^{tree}'))) 'release reports pinned source commit/tree'
-    Assert-Test ($release.SourceFileCount -eq $sources.Count -and $release.NativeArtifactCount -eq 5 -and $release.NativeExports -eq 20) 'release has source plus native artifacts and updater inventory'
+    Assert-Test ($release.SourceFileCount -eq $sources.Count -and $release.NativeArtifactCount -eq 5 -and $release.NativeExports -eq $manifest.SystemExports.Count) 'release has source plus portable native template and updater inventory'
     $zip=[IO.Compression.ZipFile]::OpenRead($release.ZipPath)
     try{
         $names=@($zip.Entries|Where-Object {-not $_.FullName.EndsWith('/')}|ForEach-Object {$_.FullName})

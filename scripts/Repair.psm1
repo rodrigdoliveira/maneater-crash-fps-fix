@@ -8,6 +8,8 @@ $script:PublicV07ModHash = 'BF59359AC0DA0823B563F501E18BBF407E6359C07B1E1524F888
 $script:PublicV07HelperHash = '898C59D575AFF5DD9F6CDB0F46A2DEB5F1700DF80A5DDFE2A86AE1C71B1DCB7A'
 $script:PublicV08ModHash = 'AD10EBBA7A293B8D5323A19997495E50A234A3EAD73BE8BB8F89D60FA25C253A'
 $script:PublicV08HelperHash = '898C59D575AFF5DD9F6CDB0F46A2DEB5F1700DF80A5DDFE2A86AE1C71B1DCB7A'
+$script:PublicV09ModHash = 'A131F2CC2E7A417DC80ED2BF99EEE7135E503A030476F567D0D0100A28FB2463'
+$script:PublicV09HelperHash = '7536884CBDDB9CE07784708AB952E5D0F3BBCDBB9CE98D7C20F1C93EAA58BD31'
 $script:LocalV08ModHash = '06CF53D9174E600D9745C16EB4F51B50C5568B41D831A6A5E534BFC000BEB3CC'
 $script:LocalV08HelperHash = '898C59D575AFF5DD9F6CDB0F46A2DEB5F1700DF80A5DDFE2A86AE1C71B1DCB7A'
 $script:PrivateLoadingModHash = '03FAD0061DD00A332E2C93CA10FE3ECF2379ADAFBEBE7A59A2FFDE384A11E744'
@@ -78,15 +80,27 @@ function Test-RepairAnselSkipped {
     return $null -ne $Plan.PSObject.Properties['AnselDisposition'] -and $Plan.AnselDisposition -eq 'SkippedUnknownSDK'
 }
 function Test-BundleUpdateAvailable($Journal){
-    if(-not(Get-RepairBuildReady)){return $false}
+    $bundle=Get-RepairBuildReady -Detailed
+    if(-not$bundle.Ready){return $false}
     $build=Get-Content -LiteralPath (Join-Path $script:Root 'dist/build.json') -Raw|ConvertFrom-Json
     return $null-eq$Journal.PSObject.Properties['PackageVersion']-or$Journal.PackageVersion-cne$build.Version-or
-        $Journal.Plan.Native.InstalledHash-cne$build.ModSHA256-or$Journal.Plan.Native.InstalledHelperHash-cne$build.HelperSHA256
+        $Journal.Plan.Native.InstalledHash-cne$bundle.InstalledModSHA256-or$Journal.Plan.Native.InstalledHelperHash-cne$build.HelperSHA256
 }
 function Get-RepairBuildReady {
+    param([switch]$Detailed)
+    $code='MissingBundleFiles'
+    $detail=$null;$installedHash=$null;$packageVersion=$null;$system=$null;$manifest=$null
+    $checkedFile=$null;$expectedHash=$null;$actualHash=$null
     try {
+        foreach($relative in @('dist/build.json','dist/dxgi.dll','dist/dxgi_proxy.def','dist/ManeaterAreaHelper.exe')){
+            if(-not[IO.File]::Exists((Join-Path $script:Root $relative))){$checkedFile=$relative;throw ('Missing file: '+$relative)}
+        }
+        $code='InvalidBundleManifest'
+        $checkedFile='dist/build.json'
         $manifest = Get-Content -LiteralPath (Join-Path $script:Root 'dist\build.json') -Raw | ConvertFrom-Json
-        if ($manifest.SchemaVersion -ne 1 -or $manifest.Version -cne '0.9.0' -or $manifest.GameSHA256 -cne $script:SupportedGameHash -or $manifest.TargetFPS -ne 120 -or $manifest.HelperSHA256 -cnotmatch '^[0-9A-F]{64}$') { return $false }
+        $packageVersion=$manifest.Version
+        if ($manifest.SchemaVersion -ne 1 -or $manifest.Version -cne '0.9.0' -or $manifest.GameSHA256 -cne $script:SupportedGameHash -or $manifest.TargetFPS -ne 120 -or $manifest.HelperSHA256 -cnotmatch '^[0-9A-F]{64}$') { throw 'The build manifest does not match this launcher.' }
+        $code='BundleSourcesChanged'
         $sources = [Collections.Generic.List[string]]::new()
         foreach ($folder in @('src','vendor')) {
             $directory = Join-Path $script:Root $folder
@@ -95,22 +109,70 @@ function Get-RepairBuildReady {
             }
         }
         foreach ($name in @('scripts/PeExports.psm1','build.ps1','Manage-Mod.ps1')) { $sources.Add($name) }
-        if ('src/maneater_fps_hook.c' -cnotin $sources -or @($manifest.SourceHashes.PSObject.Properties).Count -ne $sources.Count) { return $false }
+        if ('src/maneater_fps_hook.c' -cnotin $sources -or @($manifest.SourceHashes.PSObject.Properties).Count -ne $sources.Count) { throw 'The packaged source files are incomplete or do not match the build manifest.' }
         foreach ($relative in $sources) {
+            $checkedFile=$relative;$expectedHash=$null;$actualHash=$null
             $property = $manifest.SourceHashes.PSObject.Properties[$relative]
-            if ($null -eq $property -or $property.Value -cnotmatch '^[0-9A-F]{64}$' -or (Get-RepairHash (Join-Path $script:Root $relative)) -cne $property.Value) { return $false }
+            if($null-ne$property){$expectedHash=$property.Value}
+            if([IO.File]::Exists((Join-Path $script:Root $relative))){$actualHash=Get-RepairHash (Join-Path $script:Root $relative)}
+            if ($null -eq $property -or $property.Value -cnotmatch '^[0-9A-F]{64}$' -or $actualHash -cne $property.Value) { throw ('A packaged source file is missing or changed: '+$relative) }
         }
-        if ((Get-RepairHash (Join-Path $script:Root 'dist\dxgi.dll')) -cne $manifest.ModSHA256 -or
-            (Get-RepairHash (Join-Path $script:Root 'dist\dxgi_proxy.def')) -cne $manifest.DefinitionSHA256 -or
-            (Get-RepairHash (Join-Path $script:Root 'dist\ManeaterAreaHelper.exe')) -cne $manifest.HelperSHA256) { return $false }
-        $system = Get-VerifiedWindowsDxgi
-        if ($system.Table.ContractSHA256 -cne $manifest.SystemExportsSHA256 -or
-            (Get-ExportContractHash -Exports @($manifest.SystemExports)) -cne $manifest.SystemExportsSHA256) { return $false }
+        $code='BundleArtifactsChanged'
+        foreach($entry in @(@{File='dist/dxgi.dll';Hash=$manifest.ModSHA256},@{File='dist/dxgi_proxy.def';Hash=$manifest.DefinitionSHA256},@{File='dist/ManeaterAreaHelper.exe';Hash=$manifest.HelperSHA256})){
+            $checkedFile=$entry.File;$expectedHash=$entry.Hash;$actualHash=Get-RepairHash (Join-Path $script:Root $entry.File)
+            if($actualHash -cne $expectedHash){throw ('A compiled package file failed verification: '+$entry.File)}
+        }
+        $checkedFile=$null;$expectedHash=$null;$actualHash=$null
+        $code='InvalidBundleManifest'
+        if((Get-ExportContractHash -Exports @($manifest.SystemExports)) -cne $manifest.SystemExportsSHA256){throw 'The recorded Windows graphics export list failed verification.'}
+        $code='InvalidBundleProxy'
         $proxy = Get-PeExportTable (Join-Path $script:Root 'dist\dxgi.dll')
-        if ($proxy.FileSHA256 -cne $manifest.ModSHA256 -or $proxy.ContractSHA256 -cne $manifest.ModExportsSHA256) { return $false }
-        Assert-DxgiForwarderTable -Proxy $proxy -System $system.Table
-        return ($system.Table.ContractSHA256 -ceq $manifest.SystemExportsSHA256)
-    } catch { return $false }
+        if ($proxy.FileSHA256 -cne $manifest.ModSHA256 -or $proxy.ContractSHA256 -cne $manifest.ModExportsSHA256 -or $proxy.ContractSHA256 -cne $manifest.SystemExportsSHA256) { throw 'The bundled mod graphics exports do not match its manifest.' }
+        $code='WindowsGraphicsValidationFailed'
+        $system = Get-VerifiedWindowsDxgi
+        $portable=$null-ne$manifest.PSObject.Properties['ForwardingMode']
+        if($portable){
+            $code='PortableGraphicsPreparationFailed'
+            if($manifest.ForwardingMode-cne'LocalExportTableV1'){throw 'Unsupported graphics forwarding mode in the package.'}
+            $baseContract=[pscustomobject]@{ContractSHA256=$manifest.SystemExportsSHA256;Exports=$manifest.SystemExports}
+            Assert-DxgiForwarderTable -Proxy $proxy -System $baseContract
+            $adapted=New-DxgiForwarderImage -TemplatePath (Join-Path $script:Root 'dist/dxgi.dll') -System $system.Table
+            $installedHash=$adapted.FileSHA256
+        }else{
+            $code='WindowsGraphicsMismatch'
+            if($system.Table.ContractSHA256 -cne $manifest.SystemExportsSHA256){throw 'The package graphics export list differs from the local Windows graphics export list.'}
+            $code='InvalidBundleProxy'
+            Assert-DxgiForwarderTable -Proxy $proxy -System $system.Table
+            $installedHash=$manifest.ModSHA256
+        }
+        $status=[pscustomobject]@{Ready=$true;Code='Ready';Message='The mod package passed verification.'}
+    } catch {
+        $detail=$_.Exception.Message
+        $message=switch($code){
+            'MissingBundleFiles' { 'The ready-to-run mod package is incomplete. '+$detail+' Download Maneater-Crash-FPS-Fix.zip from the Releases assets and extract the whole folder. GitHub Source code archives need a manual build with build.ps1.' }
+            'WindowsGraphicsMismatch' { 'This mod package does not match the graphics components in your Windows installation. The compiled package files passed verification. Please report this error, launcher version 0.9.0, and your Windows version/build from winver.' }
+            'WindowsGraphicsValidationFailed' { 'The Windows graphics DLL could not be verified. '+$detail+' Please report this error and your Windows version/build from winver.' }
+            'PortableGraphicsPreparationFailed' { 'The graphics wrapper could not be prepared for this Windows installation. '+$detail+' Please share the diagnostic report.' }
+            default { 'The mod package failed verification. '+$detail+' Download and fully extract Maneater-Crash-FPS-Fix.zip from Releases. Developers can rebuild changed sources with build.ps1.' }
+        }
+        $status=[pscustomobject]@{Ready=$false;Code=$code;Message=($message+' No game files or settings changed.')}
+    }
+    $status|Add-Member -NotePropertyName InstalledModSHA256 -NotePropertyValue $installedHash
+    $status|Add-Member -NotePropertyName Detail -NotePropertyValue $detail
+    $status|Add-Member -NotePropertyName PackageVersion -NotePropertyValue $packageVersion
+    $status|Add-Member -NotePropertyName WindowsVersion -NotePropertyValue ([Environment]::OSVersion.Version.ToString())
+    $status|Add-Member -NotePropertyName File -NotePropertyValue $checkedFile
+    $status|Add-Member -NotePropertyName ExpectedSHA256 -NotePropertyValue $expectedHash
+    $status|Add-Member -NotePropertyName ActualSHA256 -NotePropertyValue $actualHash
+    if($null-ne$system -and $null-ne$system.Table.PSObject.Properties['Exports']){$status|Add-Member -NotePropertyName WindowsExports -NotePropertyValue @($system.Table.Exports|Select-Object Name,Ordinal)}
+    if($Detailed){return $status}
+    return [bool]$status.Ready
+}
+function Stop-RepairBundleFailure($Status){
+    $report=Join-Path $script:Root '.local/diagnostics/bundle-error.json'
+    $message=$Status.Message+"`r`nDiagnostic code: "+$Status.Code
+    try{Write-RepairJson $report $Status;$message+="`r`nDiagnostic report: "+$report}catch{$message+="`r`nThe diagnostic report could not be saved: "+$_.Exception.Message}
+    throw $message
 }
 function Get-NativeRepairPlan {
     param($Game)
@@ -140,19 +202,22 @@ function Get-NativeRepairPlan {
                         $recordGameMatches = $recordGameMatches -and $record.TestedBuild -eq (Test-RepairGameTested $Game) -and
                             $record.UntestedBuildOptIn -eq (-not (Test-RepairGameTested $Game))
                     }
-                    if ($oldModHash -ceq $build.ModSHA256 -and $oldSystemHash -ceq $system.Table.FileSHA256 -and $oldHelperHash -ceq $build.HelperSHA256 -and $recordGameMatches) { $action = 'None' }
+                    $bundle=Get-RepairBuildReady -Detailed
+                    if ($bundle.Ready -and $oldModHash -ceq $bundle.InstalledModSHA256 -and $oldSystemHash -ceq $system.Table.FileSHA256 -and $oldHelperHash -ceq $build.HelperSHA256 -and $recordGameMatches) { $action = 'None' }
                 }
             } else { throw 'Native installation record does not match the files. Restore or repair that installation first.' }
         } else {
             $known = (-not $helperPresent) -and ($oldModHash -ceq $script:LegacyModHash -or $oldModHash -ceq $script:PublicV02ModHash)
             $known = $known -or ($oldModHash -ceq $script:PublicV07ModHash -and $oldHelperHash -ceq $script:PublicV07HelperHash)
             $known = $known -or ($oldModHash -ceq $script:PublicV08ModHash -and $oldHelperHash -ceq $script:PublicV08HelperHash)
+            $known = $known -or ($oldModHash -ceq $script:PublicV09ModHash -and $oldHelperHash -ceq $script:PublicV09HelperHash)
             $known = $known -or ((Test-RepairGameTested $Game) -and $oldModHash -ceq $script:LocalV08ModHash -and $oldHelperHash -ceq $script:LocalV08HelperHash)
             $known = $known -or ((Test-RepairGameTested $Game) -and $oldModHash -ceq $script:PrivateLoadingModHash -and $oldHelperHash -ceq $script:PrivateLoadingHelperHash)
             $known = $known -or ((Test-RepairGameTested $Game) -and $oldModHash -ceq $script:PreviewV07ModHash -and $oldHelperHash -ceq $script:PreviewV07HelperHash)
             if (Get-RepairBuildReady) {
                 $build = Get-Content -LiteralPath (Join-Path $script:Root 'dist\build.json') -Raw | ConvertFrom-Json
-                $knownCurrent = $oldModHash -ceq $build.ModSHA256 -and $oldHelperHash -ceq $build.HelperSHA256
+                $bundle=Get-RepairBuildReady -Detailed
+                $knownCurrent = $bundle.Ready -and $oldModHash -ceq $bundle.InstalledModSHA256 -and $oldHelperHash -ceq $build.HelperSHA256
                 if ($oldModHash -ceq $script:PrivateLoadingModHash -and $oldHelperHash -ceq $script:PrivateLoadingHelperHash -and -not (Test-RepairGameTested $Game)) { $knownCurrent = $false }
                 $known = $known -or $knownCurrent
             }
@@ -181,7 +246,8 @@ function Get-ManeaterRepairPlan {
     if(-not $game.TestedBuild -and $ansel.Status -in @('UnrecognizedOriginal','UnrecognizedDisabled')){$anselDisposition='SkippedUnknownSDK'}
     elseif ($ansel.Action -eq 'Refuse') { throw ('Ansel files need review before automatic repair: ' + $ansel.Status + '. Existing files were preserved.') }
     $native = Get-NativeRepairPlan $game
-    [pscustomobject]@{ SchemaVersion = 1; Game = $game; SteamContext = $steam; Steam = $steamPlan; Cpu = $cpu; LaunchOptions = $launch; Ansel = $ansel; AnselDisposition=$anselDisposition; Native = $native; BuildReady = Get-RepairBuildReady }
+    $bundle=Get-RepairBuildReady -Detailed
+    [pscustomobject]@{ SchemaVersion = 1; Game = $game; SteamContext = $steam; Steam = $steamPlan; Cpu = $cpu; LaunchOptions = $launch; Ansel = $ansel; AnselDisposition=$anselDisposition; Native = $native; BuildReady = $bundle.Ready; BundleStatus=$bundle }
 }
 function Test-ManeaterRepairState {
     [CmdletBinding()]
@@ -384,15 +450,16 @@ function Restore-NativeBundleUpgrade($Journal){
     return $prior
 }
 function Update-AppliedNativeBundle($Prior,[scriptblock]$Progress={}){
-    if(-not(Get-RepairBuildReady)){throw 'Updated mod package is invalid; existing fixes were preserved.'}
+    $bundle=Get-RepairBuildReady -Detailed
+    if(-not$bundle.Ready){Stop-RepairBundleFailure $bundle}
     $build=Get-Content -LiteralPath (Join-Path $script:Root 'dist/build.json') -Raw|ConvertFrom-Json
-    if($Prior.Plan.Native.InstalledHash-ceq$build.ModSHA256-and$Prior.Plan.Native.InstalledHelperHash-ceq$build.HelperSHA256){
+    if($Prior.Plan.Native.InstalledHash-ceq$bundle.InstalledModSHA256-and$Prior.Plan.Native.InstalledHelperHash-ceq$build.HelperSHA256){
         $Prior|Add-Member -NotePropertyName PackageVersion -NotePropertyValue $build.Version -Force;Write-RepairJson (Get-RepairStatePath) $Prior;return $Prior
     }
     $bin=$Prior.Plan.Game.Bin;$directory=Join-Path $script:Root ('.local/native-upgrades/'+[Guid]::NewGuid().ToString('N'))
     [IO.Directory]::CreateDirectory($directory)|Out-Null
     $files=@(
-        [pscustomobject]@{Name='dxgi.dll';OldHash=$Prior.Plan.Native.InstalledHash;NewHash=$build.ModSHA256},
+        [pscustomobject]@{Name='dxgi.dll';OldHash=$Prior.Plan.Native.InstalledHash;NewHash=$bundle.InstalledModSHA256},
         [pscustomobject]@{Name='dxgi_codex_system.dll';OldHash=$Prior.Plan.Native.InstalledSystemHash;NewHash=$Prior.Plan.Native.InstalledSystemHash},
         [pscustomobject]@{Name='ManeaterAreaHelper.exe';OldHash=$Prior.Plan.Native.InstalledHelperHash;NewHash=$build.HelperSHA256})
     foreach($entry in $files){$target=Join-Path $bin $entry.Name;if((Get-RepairHash $target)-cne$entry.OldHash){throw 'Installed native files changed; no upgrade performed.'};[IO.File]::Copy($target,(Join-Path $directory $entry.Name),$false);if((Get-RepairHash (Join-Path $directory $entry.Name))-cne$entry.OldHash){throw 'Native upgrade backup verification failed.'}}
@@ -407,7 +474,7 @@ function Update-AppliedNativeBundle($Prior,[scriptblock]$Progress={}){
         foreach($entry in $files){if((Get-RepairHash (Join-Path $bin $entry.Name))-cne$entry.OldHash){throw 'Native upgrade destination changed.'}}
         foreach($entry in $files){[IO.File]::Delete((Join-Path $bin $entry.Name))}
         # BUNDLE_UPGRADE_BEFORE_INSTALL
-        & (Join-Path $script:Root 'Manage-Mod.ps1') -Action Install -GameDirectory $bin -AllowUntestedBuild:([bool]$Prior.UntestedBuildOptIn) -ExpectedGameSHA256 $Prior.Plan.Game.GameSHA256|Out-Null
+        & (Join-Path $script:Root 'Manage-Mod.ps1') -Action Install -GameDirectory $bin -AllowUntestedBuild:([bool]$Prior.UntestedBuildOptIn) -ExpectedGameSHA256 $Prior.Plan.Game.GameSHA256 -ExpectedModSHA256 $bundle.InstalledModSHA256 -ExpectedSystemSHA256 $files[1].NewHash|Out-Null
         if($journal.Plan.Native.Action-ceq'None'){
             $journal.Plan.Native.Action='ReplaceRecognized'
             $journal.Plan.Native.OriginalModHash=$files[0].OldHash;$journal.Plan.Native.OriginalSystemHash=$files[1].OldHash;$journal.Plan.Native.OriginalHelperHash=$files[2].OldHash
@@ -418,7 +485,7 @@ function Update-AppliedNativeBundle($Prior,[scriptblock]$Progress={}){
             }
             $journal.Plan.Native.OriginalNativeRecord=$(if($null-ne$oldStateHash){Get-Content (Join-Path $directory 'installation.json') -Raw|ConvertFrom-Json}else{$null})
         }
-        $journal.Plan.Native.InstalledHash=$build.ModSHA256;$journal.Plan.Native.InstalledHelperHash=$build.HelperSHA256
+        $journal.Plan.Native.InstalledHash=$bundle.InstalledModSHA256;$journal.Plan.Native.InstalledHelperHash=$build.HelperSHA256
         $journal|Add-Member -NotePropertyName PackageVersion -NotePropertyValue $build.Version -Force
         $journal.Status='applied'
         if(-not(Test-ManeaterRepairState $journal).Valid){throw 'Updated native files failed verification.'}
@@ -456,7 +523,7 @@ function Invoke-ManeaterRepair {
     & $Progress 'Checking the game, Steam settings, and CPU topology...'
     $plan = Get-ManeaterRepairPlan -GameExecutable $GameExecutable -SteamContext $SteamContext
     if (-not $plan.BuildReady) {
-        throw 'The ready-to-run mod bundle is missing, damaged, stale, or incompatible with this Windows DXGI export contract. Download and fully extract the ready-to-run release ZIP. Developers can rebuild manually using build.ps1 -ZigPath <compiler path>. No game files or settings changed.'
+        Stop-RepairBundleFailure $plan.BundleStatus
     }
     Assert-RepairWritable $plan.Game.Bin
     Assert-RepairWritable ([IO.Path]::GetDirectoryName($plan.SteamContext.ConfigPath))
@@ -464,7 +531,7 @@ function Invoke-ManeaterRepair {
     Assert-RepairProcessesClosed
     if ($plan.Game.GameSHA256 -cne $selected.GameSHA256 -or (Get-RepairHash $plan.Game.Executable) -cne $plan.Game.GameSHA256) { throw 'Game executable changed during preparation.' }
     $build = Get-Content -LiteralPath (Join-Path $script:Root 'dist\build.json') -Raw | ConvertFrom-Json
-    $plan.Native.InstalledHash = $(if($plan.Native.Action -eq 'None'){$plan.Native.OriginalModHash}else{$build.ModSHA256})
+    $plan.Native.InstalledHash = $(if($plan.Native.Action -eq 'None'){$plan.Native.OriginalModHash}else{$plan.BundleStatus.InstalledModSHA256})
     $plan.Native.InstalledSystemHash = $(if($plan.Native.Action -eq 'None'){$plan.Native.OriginalSystemHash}else{(Get-VerifiedWindowsDxgi).Table.FileSHA256})
     $plan.Native.InstalledHelperHash = $(if($plan.Native.Action -eq 'None'){$plan.Native.OriginalHelperHash}else{$build.HelperSHA256})
     $backup = Join-Path $script:Root ('.local\backups\' + [Guid]::NewGuid().ToString('N'))
@@ -496,7 +563,7 @@ function Invoke-ManeaterRepair {
                 [IO.File]::Delete($entry.Target)
             }
         }
-        if ($plan.Native.Action -ne 'None') { & (Join-Path $script:Root 'Manage-Mod.ps1') -Action Install -GameDirectory $plan.Game.Bin -AllowUntestedBuild:([bool]$AllowUntestedBuild) -ExpectedGameSHA256 $plan.Game.GameSHA256 | Out-Null }
+        if ($plan.Native.Action -ne 'None') { & (Join-Path $script:Root 'Manage-Mod.ps1') -Action Install -GameDirectory $plan.Game.Bin -AllowUntestedBuild:([bool]$AllowUntestedBuild) -ExpectedGameSHA256 $plan.Game.GameSHA256 -ExpectedModSHA256 $plan.Native.InstalledHash -ExpectedSystemSHA256 $plan.Native.InstalledSystemHash | Out-Null }
         & $Progress 'Applying the Ansel stability setting...'
         if(-not (Test-RepairAnselSkipped $plan)){Apply-ManeaterAnselFix -Plan $plan.Ansel | Out-Null}
         & $Progress 'Applying OpenSSL, CPU scheduling, and per-game overlay settings...'
