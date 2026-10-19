@@ -123,7 +123,7 @@ static DWORD WINAPI getup_install_worker(void *unused) {
     void *function = NULL, *native = NULL;
     void *volatile *slot = NULL;
     (void)unused;
-    getup_write_log(log, "Maneater v0.9.1: optimized uninjured chest-down get-up animation lookup.");
+    getup_write_log(log, "Maneater v0.9.2: optimized uninjured chest-down get-up animation lookup.");
     if (!getup_static_guards()) {
         getup_write_log(log, "PASS-THROUGH: strict native helper, registration or array-layout guard failed.");
         goto done;

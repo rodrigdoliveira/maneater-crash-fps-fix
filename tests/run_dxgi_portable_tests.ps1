@@ -100,7 +100,7 @@ try{
     $managerText=$managerText.Replace("if (@(Get-Process -Name 'Maneater', 'Maneater-Win64-Shipping' -ErrorAction SilentlyContinue).Count -ne 0)", 'if ($false)')
     [IO.File]::WriteAllText($manager,$managerText)
     $hashes=[ordered]@{};foreach($p in @('src/maneater_fps_hook.c','scripts/PeExports.psm1','build.ps1','Manage-Mod.ps1')){$hashes[$p]=Hash (Join-Path $fixture $p)}
-    $manifest=[ordered]@{SchemaVersion=1;Version='0.9.1';GameSHA256=$gameHash;TargetFPS=120;ForwardingMode='LocalExportTableV1';ModSHA256=$templateHash;HelperSHA256=(Hash (Join-Path $fixture 'dist/ManeaterAreaHelper.exe'));DefinitionSHA256=(Hash (Join-Path $fixture 'dist/dxgi_proxy.def'));SourceHashes=$hashes;ModExportsSHA256=$table.ContractSHA256;SystemExportsSHA256=$table.ContractSHA256;SystemExports=@($table.Exports|Select-Object Name,Ordinal)}
+    $manifest=[ordered]@{SchemaVersion=1;Version='0.9.2';GameSHA256=$gameHash;TargetFPS=120;ForwardingMode='LocalExportTableV1';ModSHA256=$templateHash;HelperSHA256=(Hash (Join-Path $fixture 'dist/ManeaterAreaHelper.exe'));DefinitionSHA256=(Hash (Join-Path $fixture 'dist/dxgi_proxy.def'));SourceHashes=$hashes;ModExportsSHA256=$table.ContractSHA256;SystemExportsSHA256=$table.ContractSHA256;SystemExports=@($table.Exports|Select-Object Name,Ordinal)}
     Json (Join-Path $fixture 'dist/build.json') $manifest
     Refuse {& $manager -Action Install -GameDirectory $bin -ExpectedModSHA256 ('0'*64)} 'mismatched preflight wrapper hash stops publication'
     Refuse {& $manager -Action Install -GameDirectory $bin -ExpectedSystemSHA256 ('0'*64)} 'changed preflight Windows hash stops publication'

@@ -99,7 +99,7 @@ function Get-RepairBuildReady {
         $checkedFile='dist/build.json'
         $manifest = Get-Content -LiteralPath (Join-Path $script:Root 'dist\build.json') -Raw | ConvertFrom-Json
         $packageVersion=$manifest.Version
-        if ($manifest.SchemaVersion -ne 1 -or $manifest.Version -cne '0.9.1' -or $manifest.GameSHA256 -cne $script:SupportedGameHash -or $manifest.TargetFPS -ne 120 -or $manifest.HelperSHA256 -cnotmatch '^[0-9A-F]{64}$') { throw 'The build manifest does not match this launcher.' }
+        if ($manifest.SchemaVersion -ne 1 -or $manifest.Version -cne '0.9.2' -or $manifest.GameSHA256 -cne $script:SupportedGameHash -or $manifest.TargetFPS -ne 120 -or $manifest.HelperSHA256 -cnotmatch '^[0-9A-F]{64}$') { throw 'The build manifest does not match this launcher.' }
         $code='BundleSourcesChanged'
         $sources = [Collections.Generic.List[string]]::new()
         foreach ($folder in @('src','vendor')) {
@@ -150,7 +150,7 @@ function Get-RepairBuildReady {
         $detail=$_.Exception.Message
         $message=switch($code){
             'MissingBundleFiles' { 'The ready-to-run mod package is incomplete. '+$detail+' Download Maneater-Crash-FPS-Fix.zip from the Releases assets and extract the whole folder. GitHub Source code archives need a manual build with build.ps1.' }
-            'WindowsGraphicsMismatch' { 'This mod package does not match the graphics components in your Windows installation. The compiled package files passed verification. Please report this error, launcher version 0.9.1, and your Windows version/build from winver.' }
+            'WindowsGraphicsMismatch' { 'This mod package does not match the graphics components in your Windows installation. The compiled package files passed verification. Please report this error, launcher version 0.9.2, and your Windows version/build from winver.' }
             'WindowsGraphicsValidationFailed' { 'The Windows graphics DLL could not be verified. '+$detail+' Please report this error and your Windows version/build from winver.' }
             'PortableGraphicsPreparationFailed' { 'The graphics wrapper could not be prepared for this Windows installation. '+$detail+' Please share the diagnostic report.' }
             default { 'The mod package failed verification. '+$detail+' Download and fully extract Maneater-Crash-FPS-Fix.zip from Releases. Developers can rebuild changed sources with build.ps1.' }

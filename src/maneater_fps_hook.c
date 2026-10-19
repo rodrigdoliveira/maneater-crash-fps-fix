@@ -409,7 +409,7 @@ static DWORD WINAPI install_worker(void *unused) {
     char line[256];
     (void)unused;
     open_log();
-    log_line("Maneater FPS hook v0.9.1: requested native 60 -> 120; menu0 and other settings forwarded.");
+    log_line("Maneater FPS hook v0.9.2: requested native 60 -> 120; menu0 and other settings forwarded.");
     if (!validate_build()) {
         log_line("PASS-THROUGH: runtime build/signature guard rejected this executable; no object changed.");
         goto done;

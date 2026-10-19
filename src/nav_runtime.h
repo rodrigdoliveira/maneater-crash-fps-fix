@@ -268,7 +268,7 @@ static DWORD WINAPI nav_worker(void *unused) {
     unsigned char hash[32];HANDLE log=INVALID_HANDLE_VALUE;PROCESS_INFORMATION pi={0};STARTUPINFOW si={0};
     if(!nav_sibling(output,L"maneater_area_fix.log"))return 0;
     log=CreateFileW(output,FILE_APPEND_DATA,FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);
-    getup_write_log(log,"Maneater v0.9.1: package-loading cleanup and bounded navigation/get-up reads with FPS correction.");
+    getup_write_log(log,"Maneater v0.9.2: package-loading cleanup and bounded navigation/get-up reads with FPS correction.");
     if(!nav_sibling(helper,L"ManeaterAreaHelper.exe") || !nav_hash_file(helper,hash) || memcmp(hash,nav_expected_helper_sha,32)) {
         getup_write_log(log,"PASS-THROUGH: helper is missing or its hash changed.");goto done;
     }

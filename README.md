@@ -2,9 +2,9 @@
 
 # Maneater Crash & FPS Fix
 
-A free, open-source Windows launcher that applies the Maneater crash/FPS repair setup and native recovery, navigation and loading optimizations from one window. **v0.9.1** includes ready-built binaries and their matching full sources.
+A free, open-source Windows launcher that applies the Maneater crash/FPS repair setup and native recovery, navigation and loading optimizations from one window. **v0.9.2** includes ready-built binaries and their matching full sources.
 
-The game optimizations passed gameplay testing on the reference Steam build. The latest update fixes installation failures caused by differences between Windows versions and explains package errors clearly. See [the validation record](docs/gameplay-validation.md).
+The game optimizations passed gameplay testing on the reference Steam build. The latest update fixes manual Steam installation selection and explains installation errors clearly. See [the validation record](docs/gameplay-validation.md).
 
 ## Download and run
 
@@ -40,7 +40,7 @@ Your graphics settings, saves and combat rules stay unchanged. Each fix checks c
 
 The included helper runs briefly when Maneater starts to activate compatible fixes, then closes automatically.
 
-See [the release notes](docs/release-notes-0.9.1.md) for version history and validation details.
+See [the release notes](docs/release-notes-0.9.2.md) for version history and validation details.
 
 ## Upgrade and restore
 

@@ -156,7 +156,7 @@ $testedBuild = $gameHash -ieq $supportedGameHash
 if (-not $testedBuild -and -not $AllowUntestedBuild) { throw 'This game build is untested. Explicit -AllowUntestedBuild is required to proceed; nothing installed.' }
 $dist = Join-Path $root 'dist'; $modSource = Join-Path $dist 'dxgi.dll'; $definition = Join-Path $dist 'dxgi_proxy.def'; $helperSource = Join-Path $dist 'ManeaterAreaHelper.exe'
 $manifest = Get-Content -LiteralPath (Join-Path $dist 'build.json') -Raw | ConvertFrom-Json
-if ($manifest.SchemaVersion -ne 1 -or $manifest.Version -cne '0.9.1' -or $manifest.GameSHA256 -ine $supportedGameHash -or $manifest.TargetFPS -ne 120 -or $manifest.HelperSHA256 -cnotmatch '^[0-9A-F]{64}$') { throw 'Unsupported build manifest.' }
+if ($manifest.SchemaVersion -ne 1 -or $manifest.Version -cne '0.9.2' -or $manifest.GameSHA256 -ine $supportedGameHash -or $manifest.TargetFPS -ne 120 -or $manifest.HelperSHA256 -cnotmatch '^[0-9A-F]{64}$') { throw 'Unsupported build manifest.' }
 $requiredSources = @(Get-RequiredBuildSources)
 if (@($manifest.SourceHashes.PSObject.Properties).Count -ne $requiredSources.Count -or 'src/maneater_fps_hook.c' -cnotin $requiredSources) { throw 'Incomplete build source provenance.' }
 foreach ($relative in $requiredSources) {

@@ -18,7 +18,7 @@ function New-GameBytes {
     foreach($pair in @(@(60,0x80),@(0x80,0x4550),@(0xa8,0x1000),@(0xd0,0x2000),@(0xd4,0x200))){[Array]::Copy([BitConverter]::GetBytes([uint32]$pair[1]),0,$bytes,[int]$pair[0],4)}
     return ,$bytes
 }
-function New-Scenario([string]$Name,[string]$PackageVersion='0.9.1'){
+function New-Scenario([string]$Name,[string]$PackageVersion='0.9.2'){
     $repo=Join-Path $testRoot $Name
     [IO.Directory]::CreateDirectory((Join-Path $repo 'scripts'))|Out-Null
     foreach($name in @('Repair','PeExports','Compiler','CpuPlan','SteamFix','AnselFix')){[IO.File]::Copy((Join-Path $sourceRoot ('scripts\'+$name+'.psm1')),(Join-Path $repo ('scripts\'+$name+'.psm1')),$false)}
@@ -117,7 +117,7 @@ function Use-RealBundleReadiness($Case){
     foreach($relative in @('src/maneater_fps_hook.c','scripts/PeExports.psm1','build.ps1','Manage-Mod.ps1')){$hashes[$relative]=Hash (Join-Path $Case.Root $relative)}
     $exports=@([pscustomobject]@{Name='Alpha';Ordinal=1},[pscustomobject]@{Name='Beta';Ordinal=2})
     $contract=& $Case.Module {param($Exports) Get-ExportContractHash -Exports $Exports} $exports
-    $manifest=[pscustomobject]@{SchemaVersion=1;Version='0.9.1';GameSHA256=(Hash $Case.Exe);TargetFPS=120;ModSHA256=(Hash $Case.Mod);HelperSHA256=(Hash $Case.Helper);DefinitionSHA256=(Hash $definition);SystemExportsSHA256=$contract;ModExportsSHA256=$contract;SystemExports=$exports;BuildSystemDLLSHA256=(Hash $Case.System);SourceHashes=$hashes}
+    $manifest=[pscustomobject]@{SchemaVersion=1;Version='0.9.2';GameSHA256=(Hash $Case.Exe);TargetFPS=120;ModSHA256=(Hash $Case.Mod);HelperSHA256=(Hash $Case.Helper);DefinitionSHA256=(Hash $definition);SystemExportsSHA256=$contract;ModExportsSHA256=$contract;SystemExports=$exports;BuildSystemDLLSHA256=(Hash $Case.System);SourceHashes=$hashes}
     [IO.File]::WriteAllText((Join-Path $Case.Root 'dist\build.json'),($manifest|ConvertTo-Json -Depth 6))
     $tokens=$null;$errors=$null
     $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $sourceRoot 'scripts\Repair.psm1'),[ref]$tokens,[ref]$errors)
@@ -383,7 +383,7 @@ try{
         & $case.Module {$script:WritableProbeCount=0;function script:Assert-RepairWritable {param($Directory) $script:WritableProbeCount++;throw 'Writable probe tripwire'}}
         $message='';try{Invoke-Case $case|Out-Null}catch{$message=$_.Exception.Message}
         Assert-Test ($message.StartsWith($diagnostic.Message) -and $message -match ('Diagnostic code: '+$expectedCode) -and $message -match 'No game files or settings changed') "$failure repair displays classified diagnostic and code"
-        $report=Get-Content (Join-Path $case.Root '.local/diagnostics/bundle-error.json') -Raw|ConvertFrom-Json
+        $report=Get-Content (Join-Path $case.Root '.local/diagnostics/bundle-error.json') -Raw -Encoding UTF8|ConvertFrom-Json
         Assert-Test ($report.Code -ceq $expectedCode -and $report.Detail -ceq $diagnostic.Detail -and $report.WindowsVersion -and $report.PackageVersion -eq $diagnostic.PackageVersion) "$failure diagnostic report records the actual cause and Windows/package versions"
         if($expectedCode -like 'WindowsGraphics*'){
             Assert-Test ($message -match 'winver' -and $message -notmatch 'incomplete|extract|build.ps1') "$failure reports Windows verification/compatibility instead of missing files"
