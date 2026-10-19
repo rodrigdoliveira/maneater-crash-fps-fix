@@ -15,7 +15,9 @@ The game optimizations passed gameplay testing on the reference Steam build. The
 
 The release ZIP includes the compiled mod DLL, its matching attachment helper, manifest, full sources and tests. Extract the ZIP once for the first installation. Future launcher updates are automatic; no compiler or compiler download is required. A source-only checkout needs the developer build described below.
 
-The launcher searches Steam's installation folders and registered libraries, including other drives and custom folders recorded in the game manifest. It detects your CPU and verifies the game and packaged files. During installation, it prepares the graphics wrapper for your own Windows graphics library, so it can use different Windows function lists without a compiler. Manual Steam launch-option edits are not required.
+The launcher searches Steam's installation folders and registered libraries, including other drives and custom folders recorded in the game manifest. Manual selection validates the chosen copy against its own Steam library and Maneater installation record; other copies do not block it. To find the correct executable, use **Steam → Maneater → Manage → Browse local files**.
+
+It detects your CPU and verifies the game and packaged files. During installation, it prepares the graphics wrapper for your own Windows graphics library, so it can use different Windows function lists without a compiler. Manual Steam launch-option edits are not required.
 
 The launcher may ask to close Steam briefly to save its per-game settings. If Windows restricts access to the game folder, it offers to restart with administrator access. Keep the extracted folder: `.local` contains the restore record and backups. Do not run two mod installers at the same time.
 

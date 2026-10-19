@@ -16,6 +16,7 @@ $encoding=[Text.UTF8Encoding]::new($false)
 $passed=0
 function Assert-Test { param([bool]$Condition,[string]$Message) if (-not $Condition) { throw "FAIL: $Message" }; $script:passed++ }
 function Assert-Throws { param([scriptblock]$Operation,[string]$Message) $caught=$false; try { & $Operation | Out-Null } catch { $caught=$true }; Assert-Test $caught $Message }
+function Assert-Error { param([scriptblock]$Operation,[string]$Pattern,[string]$Message) $detail=''; try { & $Operation | Out-Null } catch { $detail=$_.Exception.Message }; Assert-Test ($detail -like $Pattern) $Message }
 function Write-Fixture { param([string]$Text) [IO.File]::WriteAllText($config,$Text,$encoding) }
 function Plan-Text { param($Plan) $bytes=[IO.File]::ReadAllBytes($config); $patches=@($Plan.Patches | ForEach-Object { [ManeaterCrashFpsFix.VdfPatch]::new([int]$_.Start,[int]$_.DeleteCount,[Convert]::FromBase64String($_.ReplacementBase64)) }); return [Text.Encoding]::UTF8.GetString([ManeaterCrashFpsFix.SteamVdf]::Apply($bytes,[ManeaterCrashFpsFix.VdfPatch[]]$patches)) }
 $base=@'
@@ -138,16 +139,48 @@ try {
     $gameRoot=Join-Path $library 'steamapps\common\Maneater'
     Assert-Test ((Assert-SteamManeaterInstallation $context $gameRoot).Validated) 'registered library and correct appmanifest match selected game root'
     $copied=Join-Path $scratch 'arbitrary-copy'; [IO.Directory]::CreateDirectory($copied) | Out-Null
-    Assert-Throws { Assert-SteamManeaterInstallation $context $copied } 'arbitrary executable-copy root refused'
+    Assert-Error { Assert-SteamManeaterInstallation $context $copied } '*outside a Steam library*Browse local files*' 'arbitrary executable-copy root refused with Steam picker guidance'
     [IO.File]::WriteAllText($manifest,'"AppState" { "appid" "111" "installdir" "Maneater" }',$encoding)
-    Assert-Throws { Assert-SteamManeaterInstallation $context $gameRoot } 'wrong manifest appid refused'
+    Assert-Error { Assert-SteamManeaterInstallation $context $gameRoot } '*does not identify Maneater*629820*' 'wrong manifest appid has a specific error'
     [IO.File]::WriteAllText($manifest,'"AppState" { "appid" "629820" "installdir" "..\outside" }',$encoding)
-    Assert-Throws { Assert-SteamManeaterInstallation $context $gameRoot } 'manifest directory traversal refused'
+    Assert-Error { Assert-SteamManeaterInstallation $context $gameRoot } '*invalid game folder*' 'manifest directory traversal refused with a specific error'
     [IO.File]::WriteAllText($manifest,'"AppState" { "appid" "629820" "installdir" "Maneater" }',$encoding)
     [IO.File]::WriteAllText($libraryFile,$libraryText.Replace('"629820" "1234"','"other-app" "1234"'),$encoding)
-    Assert-Throws { Assert-SteamManeaterInstallation $context $gameRoot } 'unregistered app refused even if stale manifest exists'
+    Assert-Test ((Assert-SteamManeaterInstallation $context $gameRoot).Validated) 'matching manifest validates selected copy when cached app registration is stale'
+    [IO.File]::WriteAllText($libraryFile,$libraryText.Replace('"apps" { "629820" "1234" }',''),$encoding)
+    Assert-Test ((Assert-SteamManeaterInstallation $context $gameRoot).Validated) 'matching manifest does not require a cached apps container'
     [IO.File]::WriteAllText($libraryFile,$libraryText.Replace('} } }','} } "2" { "path" ' + $libraryToken + ' "apps" { "629820" "1234" } } }'),$encoding)
-    Assert-Throws { Assert-SteamManeaterInstallation $context $gameRoot } 'duplicate registered library path refused'
+    Assert-Test ((Assert-SteamManeaterInstallation $context $gameRoot).Validated) 'duplicate library references do not make the chosen manifest ambiguous'
+    $secondLibrary=Join-Path $scratch 'second-library'; $secondGame=Join-Path $secondLibrary 'steamapps\common\Maneater'
+    [IO.Directory]::CreateDirectory($secondGame)|Out-Null
+    $secondManifest=Join-Path $secondLibrary 'steamapps\appmanifest_629820.acf'
+    [IO.File]::WriteAllText($secondManifest,'"AppState" { "appid" "629820" "installdir" "Maneater" }',$encoding)
+    $secondToken=[Text.Encoding]::UTF8.GetString([ManeaterCrashFpsFix.SteamVdf]::Quote($secondLibrary))
+    $twoLibraries=$libraryText.Replace('} } }','} } "2" { "path" ' + $secondToken + ' "apps" { "629820" "1234" } } }')
+    [IO.File]::WriteAllText($libraryFile,$twoLibraries,$encoding)
+    $librariesHash=(Get-FileHash $libraryFile).Hash; $selectedManifestHash=(Get-FileHash $manifest).Hash
+    $selectedFirst=Assert-SteamManeaterInstallation $context $gameRoot
+    $selectedSecond=Assert-SteamManeaterInstallation $context $secondGame
+    Assert-Test ($selectedFirst.Validated -and $selectedFirst.LibraryPath -ceq $library -and $selectedSecond.Validated -and $selectedSecond.LibraryPath -ceq $secondLibrary) 'manual selection of either registered copy succeeds with two installations'
+    [IO.File]::WriteAllText($secondManifest,'malformed stale manifest',$encoding)
+    Assert-Test ((Assert-SteamManeaterInstallation $context $gameRoot).Validated) 'unrelated stale manifest does not block the selected valid installation'
+    Assert-Test ((Get-FileHash $libraryFile).Hash -ceq $librariesHash -and (Get-FileHash $manifest).Hash -ceq $selectedManifestHash) 'selection validation never edits Steam metadata'
+    [IO.File]::WriteAllText($libraryFile,('"libraryfolders" { "1" { "path" '+$secondToken+' } }'),$encoding)
+    Assert-Error { Assert-SteamManeaterInstallation $context $gameRoot } '*not in a registered Steam library*Settings > Storage*' 'a manifest in an unregistered library is still refused with storage guidance'
+    [IO.File]::WriteAllText($libraryFile,'malformed metadata',$encoding)
+    Assert-Error { Assert-SteamManeaterInstallation $context $gameRoot } '*libraryfolders.vdf*could not be read*' 'malformed library list has a specific error'
+    [IO.File]::WriteAllText($libraryFile,'"libraryfolders" { "1" { "path" "relative-library" } }',$encoding)
+    Assert-Error { Assert-SteamManeaterInstallation $context $gameRoot } '*library list contains an invalid path*' 'relative library paths are refused with a specific error'
+    [IO.File]::Delete($libraryFile)
+    Assert-Error { Assert-SteamManeaterInstallation $context $gameRoot } '*library list*is missing*Settings > Storage*' 'missing library list has a specific error'
+    [IO.File]::WriteAllText($libraryFile,$libraryText,$encoding)
+    [IO.File]::Delete($manifest)
+    Assert-Error { Assert-SteamManeaterInstallation $context $gameRoot } '*missing Maneater*appmanifest_629820.acf*Browse local files*' 'missing selected manifest has a specific error and picker guidance'
+    [IO.File]::WriteAllText($manifest,'malformed metadata',$encoding)
+    Assert-Error { Assert-SteamManeaterInstallation $context $gameRoot } '*installation record*could not be read*' 'malformed selected manifest has a specific error'
+    [IO.File]::WriteAllText($manifest,'"AppState" { "appid" "629820" "installdir" "Another Maneater Folder" }',$encoding)
+    Assert-Error { Assert-SteamManeaterInstallation $context $gameRoot } '*points to a different folder*Browse local files*' 'selected copy must match its own library manifest'
+    [IO.File]::WriteAllText($manifest,'"AppState" { "appid" "629820" "installdir" "Maneater" }',$encoding)
     [IO.File]::WriteAllText($libraryFile,'"libraryfolders" { "1" ' + $libraryToken + ' }',$encoding)
     Assert-Test ((Assert-SteamManeaterInstallation $context $gameRoot).Validated) 'legacy registered-library format supported'
     Assert-Test ((& $module { Normalize-SteamFixDirectory 'D:\' }) -ceq 'D:\') 'drive-root library path is not converted to drive-relative path'
@@ -170,6 +203,7 @@ try {
     [IO.File]::WriteAllText($manifest,'"AppState" { "appid" "629820" "installdir" "Custom Maneater Folder" }',$encoding)
     $customExe=Join-Path $custom 'Maneater\Binaries\Win64\Maneater-Win64-Shipping.exe'
     Assert-Test ((Find-SteamManeaterExecutable -SteamDirectories @($steam)).Executable -ceq $customExe) 'appmanifest custom installation directory is detected'
+    Assert-Test ((Assert-SteamManeaterInstallation $context $custom).Validated) 'custom folder selected after discovery passes its own Steam manifest validation'
     [IO.File]::WriteAllText($manifest,'"AppState" { "appid" "629820" "installdir" "..\outside" }',$encoding)
     Assert-Test (-not (Find-SteamManeaterExecutable -SteamDirectories @($steam)).Found) 'manifest traversal is never searched'
     [IO.Directory]::Move($custom,$gameRoot)
@@ -180,6 +214,12 @@ try {
     [IO.File]::WriteAllText($defaultShipping,'never-executed default fixture')
     $multiple=Find-SteamManeaterExecutable -SteamDirectories @($steam)
     Assert-Test (-not $multiple.Found -and $multiple.Reason -like 'Multiple*') 'ambiguous installed copies are left for manual selection'
+    $defaultManifest=Join-Path $steam 'steamapps\appmanifest_629820.acf'
+    [IO.File]::WriteAllText($defaultManifest,'"AppState" { "appid" "629820" "installdir" "Maneater" }',$encoding)
+    Assert-Test ((Assert-SteamManeaterInstallation $context $gameRoot).Validated -and (Assert-SteamManeaterInstallation $context $defaultRoot).Validated) 'both choices offered after ambiguous discovery pass installation validation'
+    [IO.File]::Delete($libraryFile)
+    Assert-Test ((Assert-SteamManeaterInstallation $context $defaultRoot).Validated) 'default Steam library needs no external library registration file'
+    [IO.File]::WriteAllText($libraryFile,$libraryText,$encoding)
     [IO.File]::Delete($shipping)
     $defaultLauncher=Join-Path $defaultRoot 'Maneater.exe';[IO.File]::WriteAllText($defaultLauncher,'never-executed root fixture')
     Assert-Test ((Find-SteamManeaterExecutable -SteamDirectories @($steam)).Executable -ceq $defaultLauncher) 'conventional Steam common folder is detected without account settings'

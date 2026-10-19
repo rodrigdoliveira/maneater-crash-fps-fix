@@ -419,55 +419,69 @@ function Assert-SteamManeaterInstallation {
     $context=Get-SteamFixContext -Context $Context
     $selected=Normalize-SteamFixDirectory (Resolve-Path -LiteralPath $GameRoot).ProviderPath
     if (-not [IO.Directory]::Exists($selected)) { throw 'Selected game root must be a directory.' }
-    $libraryFile=Join-Path $context.SteamDirectory 'steamapps\libraryfolders.vdf'
-    $libraries=@(); $libraryHash=$null; $seen=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-    if ([IO.File]::Exists($libraryFile)) {
-        $file=Read-SteamFixFile $libraryFile; $libraryHash=$file.Hash
-        $node=[ManeaterCrashFpsFix.SteamVdf]::Container($file.Tree,'libraryfolders')
-        $indexes=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    $browseHint='Use Steam > Maneater > Manage > Browse local files, then choose its executable.'
+    $common=[IO.Path]::GetDirectoryName($selected)
+    $steamapps=$(if ($common) { [IO.Path]::GetDirectoryName($common) } else { '' })
+    if ([IO.Path]::GetFileName($common) -ine 'common' -or [IO.Path]::GetFileName($steamapps) -ine 'steamapps') {
+        throw ('The selected game is outside a Steam library''s steamapps\common folder. ' + $browseHint)
+    }
+    $library=Normalize-SteamFixDirectory ([IO.Path]::GetDirectoryName($steamapps))
+    $libraryHash=$null
+    # Validate the chosen library only. Other installed copies (or their stale
+    # manifests) must not make an explicit selection ambiguous.
+    if ($library -ine (Normalize-SteamFixDirectory $context.SteamDirectory)) {
+        $libraryFile=Join-Path $context.SteamDirectory 'steamapps\libraryfolders.vdf'
+        if (-not [IO.File]::Exists($libraryFile)) {
+            throw 'Steam''s library list (libraryfolders.vdf) is missing. Open Steam > Settings > Storage, register this library, then retry.'
+        }
+        try {
+            $file=Read-SteamFixFile $libraryFile; $libraryHash=$file.Hash
+            $node=[ManeaterCrashFpsFix.SteamVdf]::Container($file.Tree,'libraryfolders')
+        } catch {
+            throw 'Steam''s library list (libraryfolders.vdf) could not be read. Open Steam > Settings > Storage, check its libraries, then retry.'
+        }
+        $registered=$false; $invalidPath=$false
         foreach ($pair in $node.Pairs) {
             if ($pair.Key.Value -notmatch '^\d+$') { continue }
-            if (-not $indexes.Add($pair.Key.Value)) { throw 'Ambiguous duplicate Steam library index.' }
-            $registeredApp=$null
-            if ($null -ne $pair.Child) {
-                $pathPair=[ManeaterCrashFpsFix.SteamVdf]::Unique($pair.Child,'path',$true)
-                if ($null -eq $pathPair.Value -or $pathPair.Value.UnknownEscape) { throw 'Unsupported Steam library path.' }
+            try {
+                $pathPair=$pair
+                if ($null -ne $pair.Child) { $pathPair=[ManeaterCrashFpsFix.SteamVdf]::Unique($pair.Child,'path',$true) }
+                if ($null -eq $pathPair.Value -or $pathPair.Value.UnknownEscape -or -not [IO.Path]::IsPathRooted($pathPair.Value.Value)) { throw 'Invalid library path.' }
                 $path=Normalize-SteamFixDirectory $pathPair.Value.Value
-                $appsPair=[ManeaterCrashFpsFix.SteamVdf]::Unique($pair.Child,'apps',$true)
-                if ($null -eq $appsPair.Child) { throw 'Unsupported Steam library app list.' }
-                $registeredPair=[ManeaterCrashFpsFix.SteamVdf]::Unique($appsPair.Child,'629820',$false)
-                if ($null -ne $registeredPair -and ($null -eq $registeredPair.Value -or $registeredPair.Value.UnknownEscape -or $registeredPair.Value.Value -notmatch '^\d+$')) { throw 'Unsupported Steam library app registration.' }
-                $registeredApp=$null -ne $registeredPair
-            } else {
-                if ($null -eq $pair.Value -or $pair.Value.UnknownEscape) { throw 'Unsupported legacy Steam library path.' }
-                $path=Normalize-SteamFixDirectory $pair.Value.Value
-            }
-            if (-not $seen.Add($path)) { throw 'Ambiguous duplicate Steam library path.' }
-            $libraries += [pscustomobject]@{ Path=$path; RegisteredApp=$registeredApp }
+            } catch { $invalidPath=$true; continue }
+            if ($path -ieq $library) { $registered=$true; break }
+        }
+        if (-not $registered) {
+            if ($invalidPath) { throw 'Steam''s library list contains an invalid path. Open Steam > Settings > Storage, check the selected library, then retry.' }
+            throw 'The selected game is not in a registered Steam library. Add its library in Steam > Settings > Storage, then choose Maneater again.'
         }
     }
-    $default=Normalize-SteamFixDirectory $context.SteamDirectory
-    if ($seen.Add($default)) { $libraries += [pscustomobject]@{ Path=$default; RegisteredApp=$null } }
-    $matches=@()
-    foreach ($library in $libraries) {
-        if ($null -ne $library.RegisteredApp -and -not $library.RegisteredApp) { continue }
-        $manifestPath=Join-Path $library.Path 'steamapps\appmanifest_629820.acf'
-        if (-not [IO.File]::Exists($manifestPath)) { continue }
+    $manifestPath=Join-Path $library 'steamapps\appmanifest_629820.acf'
+    if (-not [IO.File]::Exists($manifestPath)) {
+        throw ('The selected library is missing Maneater''s installation record (appmanifest_629820.acf). ' + $browseHint)
+    }
+    try {
         $manifest=Read-SteamFixFile $manifestPath
         $app=[ManeaterCrashFpsFix.SteamVdf]::Container($manifest.Tree,'AppState')
         $id=[ManeaterCrashFpsFix.SteamVdf]::Unique($app,'appid',$true)
         $install=[ManeaterCrashFpsFix.SteamVdf]::Unique($app,'installdir',$true)
-        if ($null -eq $id.Value -or $id.Value.UnknownEscape -or $id.Value.Value -cne '629820' -or
-            $null -eq $install.Value -or $install.Value.UnknownEscape) { throw 'Steam app manifest does not match Maneater.' }
-        $directory=$install.Value.Value
-        if ([string]::IsNullOrWhiteSpace($directory) -or $directory -in @('.','..') -or $directory.IndexOfAny([char[]]'\/') -ge 0 -or [IO.Path]::IsPathRooted($directory)) { throw 'Unsupported Steam installation directory in manifest.' }
-        $actual=Normalize-SteamFixDirectory (Join-Path $library.Path ('steamapps\common\' + $directory))
-        if ([IO.Directory]::Exists($actual)) { $matches += [pscustomobject]@{ GameRoot=$actual; LibraryPath=$library.Path; ManifestPath=$manifestPath; ManifestSHA256=$manifest.Hash } }
+    } catch {
+        throw 'Maneater''s installation record (appmanifest_629820.acf) could not be read. Repair Maneater in Steam, then retry.'
     }
-    if ($matches.Count -ne 1) { throw 'Maneater installation is missing or ambiguous across registered Steam libraries.' }
-    if ($matches[0].GameRoot -ine $selected) { throw 'Selected executable is not the Maneater installation Steam will launch.' }
-    return [pscustomobject]@{ Validated=$true; AppId='629820'; GameRoot=$selected; LibraryPath=$matches[0].LibraryPath;
-        AppManifestPath=$matches[0].ManifestPath; AppManifestSHA256=$matches[0].ManifestSHA256; LibraryFoldersSHA256=$libraryHash }
+    if ($null -eq $id.Value -or $id.Value.UnknownEscape -or $id.Value.Value -cne '629820') {
+        throw 'The selected library''s appmanifest_629820.acf does not identify Maneater (Steam app 629820). Repair Maneater in Steam, then retry.'
+    }
+    if ($null -eq $install.Value -or $install.Value.UnknownEscape) { throw 'Maneater''s Steam installation record contains an invalid game folder. Repair Maneater in Steam, then retry.' }
+    $directory=$install.Value.Value
+    if ([string]::IsNullOrWhiteSpace($directory) -or $directory -in @('.','..') -or $directory.IndexOfAny([char[]]'\/') -ge 0 -or [IO.Path]::IsPathRooted($directory)) {
+        throw 'Maneater''s Steam installation record contains an invalid game folder. Repair Maneater in Steam, then retry.'
+    }
+    $actual=Normalize-SteamFixDirectory (Join-Path $library ('steamapps\common\' + $directory))
+    if ($actual -ine $selected) { throw ('Steam''s Maneater installation record points to a different folder. ' + $browseHint) }
+    # The app manifest identifies this copy. The library's cached apps index
+    # may lag behind it after a move or discovery, so it is not authoritative.
+    return [pscustomobject]@{ Validated=$true; AppId='629820'; GameRoot=$selected; LibraryPath=$library;
+        AppManifestPath=$manifestPath; AppManifestSHA256=$manifest.Hash; LibraryFoldersSHA256=$libraryHash }
 }
 function Get-SteamInstallDirectories {
     # Installation discovery needs no Steam account or running client.
@@ -542,7 +556,7 @@ function Find-SteamManeaterExecutable {
         }
     }
     if($games.Count -eq 1){return [pscustomobject]@{Found=$true;Executable=@($games.Values)[0];Reason='Maneater found. Checking the installation...'}}
-    $reason=$(if($games.Count -gt 1){'Multiple Maneater installations found. Use Choose game to select yours.'}else{'Maneater was not found automatically. Use Choose game to locate it.'})
+    $reason=$(if($games.Count -gt 1){'Multiple Maneater installations found. Use Choose game to select the copy from Steam > Manage > Browse local files.'}else{'Maneater was not found automatically. Use Choose game to select its executable from Steam > Manage > Browse local files.'})
     return [pscustomobject]@{Found=$false;Executable=$null;Reason=$reason}
 }
 Export-ModuleMember -Function Get-SteamFixContext,Get-SteamFixStatus,New-SteamFixPlan,Invoke-SteamFixPlan,Restore-SteamFix,Assert-SteamManeaterInstallation,Find-SteamManeaterExecutable
