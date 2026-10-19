@@ -86,6 +86,54 @@ try {
     $detected=Run-Request 'Detect'
     Assert-Test ($detected.Success -and -not $detected.Result.Found -and $detected.Result.Reason -like '*Choose game*') 'worker detection returns actionable manual-selection fallback'
 
+    # Exercise discovery and both picker filenames through the real Plan
+    # backend. Only CPU discovery is mocked; all Steam records and PE bytes
+    # below are synthetic, and no Apply action runs on these installations.
+    $steam=Join-Path $scratch 's'; $libraryA=Join-Path $scratch 'a'; $libraryB=Join-Path $scratch 'b'
+    $config=Join-Path $steam 'userdata\42\config\localconfig.vdf'
+    foreach($directory in @((Split-Path $config),(Join-Path $steam 'steamapps'),(Join-Path $libraryA 'steamapps'),(Join-Path $libraryB 'steamapps'))){[IO.Directory]::CreateDirectory($directory)|Out-Null}
+    [IO.File]::WriteAllText((Join-Path $steam 'steam.exe'),'inert Steam fixture; never executed')
+    [IO.File]::WriteAllText($config,'"UserLocalConfigStore" { "apps" { } "Software" { "Valve" { "Steam" { "apps" { } } } } }')
+    $context=@{SteamDirectory=$steam;AccountId=42;ConfigPath=$config}
+    $gameBytes=New-Object byte[] 1024
+    foreach($pair in @(@(0,0x5a4d),@(0x84,0x8664),@(0x86,1),@(0x94,240),@(0x96,0x22),@(0x98,0x20b))){[Array]::Copy([BitConverter]::GetBytes([uint16]$pair[1]),0,$gameBytes,[int]$pair[0],2)}
+    foreach($pair in @(@(60,0x80),@(0x80,0x4550),@(0xa8,0x1000),@(0xd0,0x2000))){[Array]::Copy([BitConverter]::GetBytes([uint32]$pair[1]),0,$gameBytes,[int]$pair[0],4)}
+    [IO.File]::AppendAllText((Join-Path $fixture 'scripts\Repair.psm1'),"`nfunction Get-ManeaterCpuPlan { [pscustomobject]@{Apply=`$false;Description='synthetic CPU'} }`n")
+    [IO.File]::AppendAllText($steamCopy,("`nfunction Get-SteamInstallDirectories { return @('"+$steam.Replace("'","''")+"') }`n"))
+    $libraryFile=Join-Path $steam 'steamapps\libraryfolders.vdf'
+    $tokenA=$libraryA.Replace('\','\\');$tokenB=$libraryB.Replace('\','\\')
+    [IO.File]::WriteAllText($libraryFile,('"libraryfolders" { "1" { "path" "'+$tokenA+'" "apps" { } } "2" { "path" "'+$tokenB+'" "apps" { } } }'))
+    $manualExecutables=@();$gameRoots=@()
+    foreach($library in @($libraryA,$libraryB)){
+        $game=Join-Path $library 'steamapps\common\Maneater'
+        $shipping=Join-Path $game 'Maneater\Binaries\Win64\Maneater-Win64-Shipping.exe'
+        [IO.Directory]::CreateDirectory((Split-Path $shipping))|Out-Null
+        [IO.File]::WriteAllBytes($shipping,$gameBytes)
+        [IO.File]::WriteAllText((Join-Path $game 'Maneater.exe'),'inert launcher fixture; never executed')
+        [IO.File]::WriteAllText((Join-Path $library 'steamapps\appmanifest_629820.acf'),'"AppState" { "appid" "629820" "installdir" "Maneater" }')
+        $manualExecutables+=$(if($library -eq $libraryA){Join-Path $game 'Maneater.exe'}else{$shipping})
+        $gameRoots+=$game
+        if($library -eq $libraryA){
+            $detected=Run-Request 'Detect'
+            Assert-Test ($detected.Success -and $detected.Result.Found -and $detected.Result.Executable -ceq $manualExecutables[0]) 'single installation is still detected automatically'
+            $planned=Run-Request 'Plan' $detected.Result.Executable @{SteamContext=$context}
+            Assert-Test ($planned.Success -and $planned.Result.Game.GameRoot -ceq $game) 'automatically detected copy passes real Steam preflight with an empty app cache'
+        }
+    }
+    $detected=Run-Request 'Detect'
+    Assert-Test ($detected.Success -and -not $detected.Result.Found -and $detected.Result.Reason -like 'Multiple*Choose game*Browse local files*') 'multiple copies prompt manual selection through the worker'
+    $metadataPaths=@($config,$libraryFile,(Join-Path $libraryA 'steamapps\appmanifest_629820.acf'),(Join-Path $libraryB 'steamapps\appmanifest_629820.acf'))
+    $metadataBefore=@($metadataPaths|ForEach-Object{(Get-FileHash -LiteralPath $_).Hash})
+    for($i=0;$i -lt $manualExecutables.Count;$i++){
+        $planned=Run-Request 'Plan' $manualExecutables[$i] @{SteamContext=$context}
+        Assert-Test ($planned.Success -and $planned.Result.Game.GameRoot -ceq $gameRoots[$i]) 'either manually chosen copy passes real preflight, including root and shipping filenames'
+    }
+    $metadataAfter=@($metadataPaths|ForEach-Object{(Get-FileHash -LiteralPath $_).Hash})
+    Assert-Test (($metadataBefore -join ',') -ceq ($metadataAfter -join ',') -and -not [IO.File]::Exists((Join-Path $fixture '.local\repair.json'))) 'automatic and manual planning preserve Steam metadata and create no repair journal'
+    [IO.File]::Delete((Join-Path $libraryA 'steamapps\appmanifest_629820.acf'))
+    $planned=Run-Request 'Plan' $manualExecutables[0] @{SteamContext=$context}
+    Assert-Test (-not $planned.Success -and $planned.Message -like '*missing Maneater*appmanifest_629820.acf*Browse local files*') 'worker surfaces the specific selected-library error even when another copy is valid'
+
     # Exercise the actual worker's JSON/request boundary with a recording
     # backend in this isolated COPY. The real repair/backend is separately
     # covered by test_repair.ps1; these cases never probe Steam or a game.
